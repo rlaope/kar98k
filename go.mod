@@ -1,6 +1,6 @@
 module github.com/kar98k
 
-go 1.22
+go 1.24.0
 
 require (
 	github.com/charmbracelet/bubbles v0.18.0
@@ -9,7 +9,7 @@ require (
 	github.com/prometheus/client_golang v1.19.0
 	github.com/spf13/cobra v1.8.0
 	golang.org/x/net v0.24.0
-	golang.org/x/time v0.5.0
+	golang.org/x/time v0.14.0
 	google.golang.org/grpc v1.63.2
 	gopkg.in/yaml.v3 v3.0.1
 )
