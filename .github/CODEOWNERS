@@ -1,0 +1,20 @@
+# Default owners for everything
+* @maintainers
+
+# Go code
+*.go @maintainers
+
+# Configuration
+/configs/ @maintainers
+*.yaml @maintainers
+
+# Documentation
+*.md @maintainers
+/docs/ @maintainers
+
+# CI/CD
+/.github/ @maintainers
+
+# Docker
+Dockerfile @maintainers
+docker-compose.yaml @maintainers
