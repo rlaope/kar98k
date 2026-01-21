@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question / Discussion
+    url: https://github.com/kar98k/kar98k/discussions
+    about: Ask questions and discuss ideas
+  - name: Security Vulnerability
+    url: https://github.com/kar98k/kar98k/security/advisories/new
+    about: Report security vulnerabilities privately

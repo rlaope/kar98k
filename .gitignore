@@ -36,3 +36,7 @@ configs/kar98k.local.yaml
 
 # Debug
 __debug_bin*
+
+# Documentation (Korean)
+../*-설명.md
+*-설명.md
