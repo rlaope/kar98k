@@ -1,0 +1,74 @@
+# kar98k - Traffic Simulation Configuration
+
+targets:
+  - name: api-health
+    url: http://localhost:8080/api/health
+    protocol: http
+    method: GET
+    weight: 50
+    timeout: 10s
+
+  - name: api-users
+    url: http://localhost:8080/api/users
+    protocol: http
+    method: GET
+    headers:
+      Authorization: "Bearer ${API_TOKEN}"
+      Content-Type: "application/json"
+    weight: 30
+    timeout: 15s
+
+  - name: api-data
+    url: http://localhost:8080/api/data
+    protocol: http
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    body: '{"query": "test"}'
+    weight: 20
+    timeout: 20s
+
+controller:
+  base_tps: 100
+  max_tps: 1000
+  ramp_up_duration: 30s
+  shutdown_timeout: 30s
+  schedule:
+    # Business hours: higher traffic
+    - hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]
+      tps_multiplier: 1.5
+    # Peak lunch hours
+    - hours: [12, 13]
+      tps_multiplier: 2.0
+    # Night hours: lower traffic
+    - hours: [0, 1, 2, 3, 4, 5]
+      tps_multiplier: 0.3
+
+pattern:
+  poisson:
+    enabled: true
+    lambda: 0.1           # Average spikes per second
+    spike_factor: 3.0     # TPS multiplier during spikes
+    min_interval: 30s     # Minimum time between spikes
+    max_interval: 5m      # Maximum time between spikes
+    ramp_up: 5s           # Time to reach peak spike
+    ramp_down: 10s        # Time to return to baseline
+  noise:
+    enabled: true
+    amplitude: 0.15       # +/- 15% random fluctuation
+
+worker:
+  pool_size: 1000         # Maximum concurrent workers
+  queue_size: 10000       # Request queue size
+  max_idle_conns: 100     # HTTP keep-alive connections
+  idle_conn_timeout: 90s  # Connection idle timeout
+
+health:
+  enabled: true
+  interval: 10s           # Health check interval
+  timeout: 5s             # Health check timeout
+
+metrics:
+  enabled: true
+  address: ":9090"        # Prometheus metrics endpoint
+  path: "/metrics"
