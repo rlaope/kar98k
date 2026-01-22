@@ -4,31 +4,131 @@
 
 kar98k generates realistic, irregular traffic patterns for load testing and performance validation of HTTP/1.1, HTTP/2, and gRPC services.
 
+![kar98k banner](./assets/kar98start.png)
+
 ## Features
 
+- **Interactive CLI**: Beautiful sky-blue themed TUI for easy configuration
 - **Multi-Protocol Support**: HTTP/1.1, HTTP/2, and gRPC
 - **Irregular Traffic Patterns**: Poisson-distributed spikes with micro-fluctuations
 - **Time-of-Day Scheduling**: Configure different TPS profiles for different hours
-- **Rate Limiting**: Precise TPS control with `golang.org/x/time/rate`
-- **Health Monitoring**: Built-in health checks and Prometheus metrics
-- **Graceful Shutdown**: Clean request draining on termination
+- **Real-time Monitoring**: Live stats dashboard while traffic is flowing
+- **Daemon Mode**: Run as background service with status/logs commands
+
+## Installation
+
+```bash
+# Clone and build
+git clone https://github.com/rlaope/kar98k.git
+cd kar98k
+make build
+
+# Binary is at ./bin/kar
+./bin/kar version
+```
 
 ## Quick Start
 
+### Interactive Mode (Recommended)
+
 ```bash
-# Build
-make build
-
-# Run with default config
-./bin/kar98k -config configs/kar98k.yaml
-
-# Run with Docker
-docker-compose up
+kar start
 ```
 
-## Configuration
+This launches the interactive TUI where you can configure everything step by step.
 
-See `configs/kar98k.yaml` for the full configuration reference.
+#### Step 1: Target Configuration
+
+![Step 1](./assets/config1.png)
+
+Configure your target endpoint:
+- **Target URL**: The endpoint to send traffic to
+- **HTTP Method**: GET, POST, PUT, DELETE, etc.
+- **Protocol**: http, http2, or grpc
+
+#### Step 2: Traffic Configuration
+
+![Step 2](./assets/config2.png)
+
+Set your traffic parameters:
+- **Base TPS**: Baseline transactions per second
+- **Max TPS**: Maximum TPS cap during spikes
+
+#### Step 3: Pattern Configuration
+
+![Step 3](./assets/config3.png)
+
+Fine-tune the traffic pattern:
+- **Poisson Lambda**: Average spikes per second (e.g., 0.1)
+- **Spike Factor**: TPS multiplier during spikes (e.g., 3.0x)
+- **Noise Amplitude**: Random fluctuation range (e.g., 0.15 = ±15%)
+- **Schedule**: Time-based TPS multipliers (e.g., `9-17:1.5, 0-5:0.3`)
+
+#### Step 4: Review & Fire
+
+![Step 4](./assets/config4.png)
+
+Review your configuration and pull the trigger!
+
+#### Firing
+
+![Firing](./assets/trigger.png)
+
+Watch real-time stats as traffic flows:
+- Current TPS with progress bar
+- Requests sent / Errors / Avg Latency
+- Elapsed time
+- Press `ENTER` to pause/resume, `Q` to stop
+
+### Headless Mode
+
+Run with a config file for automation:
+
+```bash
+kar run --config configs/kar98k.yaml
+```
+
+### Daemon Mode
+
+Run as a background service:
+
+```bash
+# Start daemon
+kar start --daemon
+
+# Check status
+kar status
+
+# View logs
+kar logs -f
+
+# Trigger traffic
+kar trigger
+
+# Pause traffic
+kar pause
+
+# Stop daemon
+kar stop
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `kar start` | Launch interactive TUI |
+| `kar start --daemon` | Start as background daemon |
+| `kar run --config <file>` | Run headless with config file |
+| `kar status` | Show daemon status |
+| `kar logs [-f]` | View logs (with optional follow) |
+| `kar trigger` | Start traffic generation |
+| `kar pause` | Pause traffic generation |
+| `kar stop` | Stop the daemon |
+| `kar version` | Show version info |
+
+## Configuration File
+
+For headless/daemon mode, use a YAML config file:
 
 ```yaml
 targets:
@@ -59,14 +159,14 @@ pattern:
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│  Pulse-Controller│────▶│  Pattern-Engine │────▶│   Pulse-Worker  │
-│   (Scheduler)    │     │ (Poisson/Noise) │     │  (Goroutine Pool)│
+│ Pulse-Controller│────▶│  Pattern-Engine │────▶│   Pulse-Worker  │
+│   (Scheduler)   │     │ (Poisson/Noise) │     │ (Goroutine Pool)│
 └─────────────────┘     └─────────────────┘     └─────────────────┘
          │                                               │
          ▼                                               ▼
 ┌─────────────────┐                            ┌─────────────────┐
-│  Health-Checker │                            │    Targets      │
-│   (Metrics)     │                            │ (HTTP/gRPC)     │
+│  Health-Checker │                            │     Targets     │
+│    (Metrics)    │                            │  (HTTP/gRPC)    │
 └─────────────────┘                            └─────────────────┘
 ```
 
@@ -91,8 +191,21 @@ make test-race
 # Build for all platforms
 make build-all
 
-# Lint
-make lint
+# Run sample echo server for testing
+make run-server
+
+# Run full demo
+make demo
+```
+
+## Docker
+
+```bash
+# Build image
+make docker
+
+# Run with docker-compose
+docker-compose up
 ```
 
 ## License
