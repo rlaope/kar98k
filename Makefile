@@ -1,4 +1,4 @@
-.PHONY: all build clean test test-race lint run docker docker-up docker-down help server
+.PHONY: all build clean test test-race run docker docker-up docker-down help server
 
 BINARY_NAME := kar
 BUILD_DIR := bin
@@ -47,11 +47,6 @@ test-race:
 test-cover:
 	$(GO) test -coverprofile=coverage.out ./...
 	$(GO) tool cover -html=coverage.out -o coverage.html
-
-## lint: Run linter
-lint:
-	@command -v golangci-lint >/dev/null 2>&1 || { echo "golangci-lint not installed"; exit 1; }
-	golangci-lint run ./...
 
 ## fmt: Format code
 fmt:
