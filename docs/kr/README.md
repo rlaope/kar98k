@@ -12,5 +12,5 @@
 
 ## 바로가기
 
-- [GitHub 저장소](https://github.com/kar98k/kar98k)
+- [GitHub 저장소](https://github.com/rlaope/kar98k)
 - [English Documentation](../en/README.md)
