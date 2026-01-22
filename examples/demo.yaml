@@ -1,0 +1,78 @@
+# kar98k Demo Configuration
+# For use with the sample echo server
+
+targets:
+  - name: health-check
+    url: http://localhost:8080/health
+    protocol: http
+    method: GET
+    weight: 40
+    timeout: 5s
+
+  - name: list-users
+    url: http://localhost:8080/api/users
+    protocol: http
+    method: GET
+    weight: 30
+    timeout: 10s
+
+  - name: create-user
+    url: http://localhost:8080/api/users
+    protocol: http
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    body: '{"name": "LoadTest", "email": "load@test.com"}'
+    weight: 15
+    timeout: 10s
+
+  - name: echo
+    url: http://localhost:8080/api/echo
+    protocol: http
+    method: POST
+    headers:
+      Content-Type: "application/json"
+    body: '{"message": "kar98k test", "timestamp": "now"}'
+    weight: 15
+    timeout: 5s
+
+controller:
+  base_tps: 50
+  max_tps: 200
+  ramp_up_duration: 10s
+  shutdown_timeout: 10s
+  schedule:
+    # Simulate business hours pattern
+    - hours: [9, 10, 11, 14, 15, 16]
+      tps_multiplier: 1.5
+    - hours: [12, 13]
+      tps_multiplier: 2.0
+
+pattern:
+  poisson:
+    enabled: true
+    lambda: 0.2           # More frequent spikes for demo
+    spike_factor: 2.5     # 2.5x spike
+    min_interval: 10s     # Spike every 10-60 seconds
+    max_interval: 60s
+    ramp_up: 3s
+    ramp_down: 5s
+  noise:
+    enabled: true
+    amplitude: 0.2        # ±20% fluctuation
+
+worker:
+  pool_size: 500
+  queue_size: 5000
+  max_idle_conns: 50
+  idle_conn_timeout: 60s
+
+health:
+  enabled: true
+  interval: 5s
+  timeout: 3s
+
+metrics:
+  enabled: true
+  address: ":9090"
+  path: "/metrics"
