@@ -31,12 +31,15 @@ var rootCmd = &cobra.Command{
 kar98k is a high-intensity irregular traffic simulation service.
 Generate realistic, unpredictable traffic patterns for load testing.
 
-Get started:
+Commands:
   kar start       Launch interactive configuration
   kar run         Run with config file (headless)
+  kar trigger     Pull the trigger to start traffic
+  kar pause       Pause traffic generation
   kar status      Check running instance status
   kar logs        View live logs
-  kar stop        Stop running instance`,
+  kar stop        Stop running instance
+  kar version     Show version information`,
 }
 
 // versionCmd shows version information
