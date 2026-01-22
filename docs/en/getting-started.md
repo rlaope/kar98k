@@ -2,39 +2,129 @@
 
 ## Installation
 
-### From Source
+### Download Binary (Recommended)
+
+Download the latest release for your platform:
+
+```bash
+# Linux (amd64)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-linux-amd64
+chmod +x kar98k-linux-amd64
+sudo mv kar98k-linux-amd64 /usr/local/bin/kar
+
+# Linux (arm64)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-linux-arm64
+chmod +x kar98k-linux-arm64
+sudo mv kar98k-linux-arm64 /usr/local/bin/kar
+
+# macOS (Apple Silicon / M1, M2, M3)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-darwin-arm64
+chmod +x kar98k-darwin-arm64
+sudo mv kar98k-darwin-arm64 /usr/local/bin/kar
+
+# macOS (Intel)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-darwin-amd64
+chmod +x kar98k-darwin-amd64
+sudo mv kar98k-darwin-amd64 /usr/local/bin/kar
+
+# Windows (PowerShell)
+Invoke-WebRequest -Uri https://github.com/rlaope/kar98k/releases/latest/download/kar98k-windows-amd64.exe -OutFile kar.exe
+```
+
+### Docker
+
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/rlaope/kar98k:latest
+
+# Run
+docker run --rm -it ghcr.io/rlaope/kar98k:latest version
+```
+
+### Build from Source
 
 ```bash
 # Clone the repository
-git clone https://github.com/kar98k/kar98k.git
+git clone https://github.com/rlaope/kar98k.git
 cd kar98k
 
 # Build
 make build
 
-# Verify installation
-./bin/kar98k -version
+# Binary is at ./bin/kar
+./bin/kar version
 ```
 
-### Using Docker
+### Verify Installation
 
 ```bash
-# Build Docker image
-docker build -t kar98k:latest .
-
-# Or use docker-compose
-docker-compose up -d
+kar version
 ```
-
-### Pre-built Binaries
-
-Download pre-built binaries from the [Releases](https://github.com/kar98k/kar98k/releases) page.
 
 ## Quick Start
 
-### 1. Create Configuration
+### Interactive Mode (Recommended)
 
-Create a `kar98k.yaml` file:
+```bash
+kar start
+```
+
+This launches the interactive TUI with a 4-step configuration flow:
+
+1. **Target Configuration** - URL, HTTP method, protocol selection
+2. **Traffic Configuration** - Base TPS, Max TPS settings
+3. **Pattern Configuration** - Poisson Lambda, Spike Factor, Noise Amplitude, Schedule
+4. **Review & Fire** - Review settings and pull the trigger!
+
+### Headless Mode
+
+Run with a config file for automation:
+
+```bash
+kar run --config kar98k.yaml
+```
+
+### Daemon Mode
+
+Run as a background service:
+
+```bash
+# Start daemon
+kar start --daemon
+
+# Check status
+kar status
+
+# View logs
+kar logs -f
+
+# Trigger traffic
+kar trigger
+
+# Pause traffic
+kar pause
+
+# Stop daemon
+kar stop
+```
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `kar start` | Launch interactive TUI |
+| `kar start --daemon` | Start as background daemon |
+| `kar run --config <file>` | Run headless with config file |
+| `kar status` | Show daemon status |
+| `kar logs [-f]` | View logs (with optional follow) |
+| `kar trigger` | Start traffic generation |
+| `kar pause` | Pause traffic generation |
+| `kar stop` | Stop the daemon |
+| `kar version` | Show version info |
+
+## Configuration File
+
+For headless/daemon mode, use a YAML config file:
 
 ```yaml
 targets:
@@ -61,55 +151,6 @@ pattern:
 metrics:
   enabled: true
   address: ":9090"
-```
-
-### 2. Run kar98k
-
-```bash
-./bin/kar98k -config kar98k.yaml
-```
-
-### 3. Monitor Metrics
-
-Open your browser to `http://localhost:9090/metrics` to see Prometheus metrics.
-
-## Basic Configuration
-
-### Targets
-
-Define the endpoints to send traffic to:
-
-```yaml
-targets:
-  - name: api-endpoint      # Unique identifier
-    url: http://host:port/path
-    protocol: http          # http, http2, or grpc
-    method: GET             # HTTP method
-    headers:                # Optional headers
-      Authorization: "Bearer token"
-    body: '{"key": "value"}'  # Optional request body
-    weight: 100             # Relative weight for load distribution
-    timeout: 10s            # Request timeout
-```
-
-### Traffic Pattern
-
-Control how traffic is generated:
-
-```yaml
-controller:
-  base_tps: 100           # Baseline TPS
-  max_tps: 1000           # Maximum TPS cap
-  ramp_up_duration: 30s   # Time to reach base TPS on startup
-
-pattern:
-  poisson:
-    enabled: true
-    lambda: 0.1           # Spike frequency (spikes per second)
-    spike_factor: 3.0     # TPS multiplier during spikes
-  noise:
-    enabled: true
-    amplitude: 0.15       # Random fluctuation range (±15%)
 ```
 
 ## Verification

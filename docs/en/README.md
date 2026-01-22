@@ -12,5 +12,5 @@
 
 ## Quick Links
 
-- [GitHub Repository](https://github.com/kar98k/kar98k)
+- [GitHub Repository](https://github.com/rlaope/kar98k)
 - [한국어 문서](../kr/README.md)

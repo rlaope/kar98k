@@ -17,6 +17,47 @@ kar98k generates realistic, irregular traffic patterns for load testing and perf
 
 ## Installation
 
+### Download Binary (Recommended)
+
+Download the latest release for your platform:
+
+```bash
+# Linux (amd64)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-linux-amd64
+chmod +x kar98k-linux-amd64
+sudo mv kar98k-linux-amd64 /usr/local/bin/kar
+
+# Linux (arm64)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-linux-arm64
+chmod +x kar98k-linux-arm64
+sudo mv kar98k-linux-arm64 /usr/local/bin/kar
+
+# macOS (Apple Silicon)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-darwin-arm64
+chmod +x kar98k-darwin-arm64
+sudo mv kar98k-darwin-arm64 /usr/local/bin/kar
+
+# macOS (Intel)
+curl -LO https://github.com/rlaope/kar98k/releases/latest/download/kar98k-darwin-amd64
+chmod +x kar98k-darwin-amd64
+sudo mv kar98k-darwin-amd64 /usr/local/bin/kar
+
+# Windows (PowerShell)
+Invoke-WebRequest -Uri https://github.com/rlaope/kar98k/releases/latest/download/kar98k-windows-amd64.exe -OutFile kar.exe
+```
+
+### Docker
+
+```bash
+# Pull from GitHub Container Registry
+docker pull ghcr.io/rlaope/kar98k:latest
+
+# Run
+docker run --rm -it ghcr.io/rlaope/kar98k:latest version
+```
+
+### Build from Source
+
 ```bash
 # Clone and build
 git clone https://github.com/rlaope/kar98k.git
@@ -25,6 +66,12 @@ make build
 
 # Binary is at ./bin/kar
 ./bin/kar version
+```
+
+### Verify Installation
+
+```bash
+kar version
 ```
 
 ## Quick Start
