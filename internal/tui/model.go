@@ -1044,71 +1044,88 @@ func (m Model) renderStatusCodes(codes map[int]int64) string {
 	return b.String()
 }
 
-// renderTimeChart renders a time-series chart of TPS over time
+// renderTimeChart renders a time-series table with detailed stats
 func (m Model) renderTimeChart(slots []TimeSlot) string {
 	if len(slots) == 0 {
-		return DimStyle.Render("No time series data collected")
+		return DimStyle.Render("No time series data collected (test was too short)")
 	}
 
 	var b strings.Builder
-	b.WriteString(SubtitleStyle.Render("TPS Over Time"))
+	b.WriteString(SubtitleStyle.Render("Timeline Summary (5s intervals)"))
 	b.WriteString("\n\n")
 
-	// Find max TPS for scaling
-	maxTPS := 1.0
+	// Calculate stats
+	var totalReqs, totalErrs int64
+	var minTPS, maxTPS, sumTPS float64
+	minTPS = slots[0].TPS
+	maxTPS = slots[0].TPS
+
 	for _, slot := range slots {
+		totalReqs += slot.Requests
+		totalErrs += slot.Errors
+		sumTPS += slot.TPS
+		if slot.TPS < minTPS {
+			minTPS = slot.TPS
+		}
 		if slot.TPS > maxTPS {
 			maxTPS = slot.TPS
 		}
 	}
+	avgTPS := sumTPS / float64(len(slots))
 
-	// Render simple ASCII chart
-	chartHeight := 8
-	chartWidth := len(slots)
-	if chartWidth > 60 {
-		chartWidth = 60
+	// Summary stats
+	b.WriteString(fmt.Sprintf("  %s %.0f  %s %.0f  %s %.0f\n",
+		LabelStyle.Render("Min TPS:"), minTPS,
+		LabelStyle.Render("Avg TPS:"), avgTPS,
+		LabelStyle.Render("Max TPS:"), maxTPS))
+	b.WriteString("\n")
+
+	// Table header
+	b.WriteString(DimStyle.Render("  Time       TPS     Reqs    Errs   Latency\n"))
+	b.WriteString(DimStyle.Render("  " + strings.Repeat("-", 48) + "\n"))
+
+	// Show last 8 slots (most recent data)
+	startIdx := 0
+	if len(slots) > 8 {
+		startIdx = len(slots) - 8
 	}
 
-	// Build chart rows from top to bottom
-	for row := chartHeight; row > 0; row-- {
-		threshold := (float64(row) / float64(chartHeight)) * maxTPS
-		line := "  "
+	for i, slot := range slots[startIdx:] {
+		timeStart := (startIdx + i) * 5
+		timeEnd := timeStart + 5
 
-		for i := 0; i < chartWidth && i < len(slots); i++ {
-			if slots[i].TPS >= threshold {
-				if slots[i].Errors > 0 {
-					line += ErrorStyle.Render("#")
-				} else {
-					line += ProgressBarStyle.Render("|")
-				}
-			} else {
-				line += " "
-			}
+		// Format time as MM:SS
+		timeStr := fmt.Sprintf("%02d:%02d-%02d:%02d",
+			timeStart/60, timeStart%60,
+			timeEnd/60, timeEnd%60)
+
+		// Spike indicator
+		spikeMarker := " "
+		if slot.TPS > avgTPS*1.5 {
+			spikeMarker = WarningStyle.Render("*")
 		}
 
-		// Y-axis label
-		if row == chartHeight {
-			b.WriteString(fmt.Sprintf("%5.0f %s\n", maxTPS, line))
-		} else if row == 1 {
-			b.WriteString(fmt.Sprintf("%5.0f %s\n", 0.0, line))
-		} else {
-			b.WriteString(fmt.Sprintf("      %s\n", line))
+		// Error highlight
+		errStr := fmt.Sprintf("%d", slot.Errors)
+		if slot.Errors > 0 {
+			errStr = ErrorStyle.Render(errStr)
 		}
+
+		b.WriteString(fmt.Sprintf("  %s %s%6.0f  %6d  %6s  %6.1fms\n",
+			DimStyle.Render(timeStr),
+			spikeMarker,
+			slot.TPS,
+			slot.Requests,
+			errStr,
+			slot.AvgLatency))
 	}
 
-	// X-axis
-	if chartWidth > 0 {
-		b.WriteString("      " + DimStyle.Render(strings.Repeat("─", chartWidth)))
-		b.WriteString("\n")
-		spacing := chartWidth - 9
-		if spacing < 0 {
-			spacing = 0
-		}
-		b.WriteString(fmt.Sprintf("      %s%s%s",
-			DimStyle.Render("start"),
-			strings.Repeat(" ", spacing),
-			DimStyle.Render("end")))
+	if startIdx > 0 {
+		b.WriteString(DimStyle.Render(fmt.Sprintf("\n  ... and %d earlier intervals\n", startIdx)))
 	}
+
+	b.WriteString("\n")
+	b.WriteString(DimStyle.Render("  * = spike detected (>1.5x avg TPS)"))
 
 	return b.String()
 }
