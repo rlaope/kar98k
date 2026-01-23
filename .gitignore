@@ -5,7 +5,7 @@ bin/
 *.dll
 *.so
 *.dylib
-kar98k
+/kar98k
 
 # Test binary
 *.test
