@@ -2,6 +2,7 @@ package pattern
 
 import (
 	"sync"
+	"time"
 
 	"github.com/kar98k/internal/config"
 )
@@ -87,6 +88,16 @@ func (e *Engine) GetMaxTPS() float64 {
 // IsSpiking returns whether a Poisson spike is active.
 func (e *Engine) IsSpiking() bool {
 	return e.poisson.IsSpiking()
+}
+
+// TriggerManualSpike triggers a manual spike with optional custom factor and duration.
+func (e *Engine) TriggerManualSpike(factor float64, duration time.Duration) {
+	e.poisson.TriggerManualSpike(factor, duration)
+}
+
+// IsManualSpike returns whether a manual spike is currently active.
+func (e *Engine) IsManualSpike() bool {
+	return e.poisson.IsManualSpike()
 }
 
 // Status returns the current status of all pattern generators.

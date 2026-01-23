@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/exec"
@@ -9,6 +10,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kar98k/internal/config"
@@ -66,12 +68,31 @@ func runStart(cmd *cobra.Command, args []string) error {
 	m := tui.NewModel()
 	p := tea.NewProgram(m, tea.WithAltScreen())
 
-	// Handle SIGTERM to show report before exit
+	// Handle signals
 	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT, signalUSR1)
+	cmdPath := filepath.Join(os.TempDir(), "kar98k", "kar98k.cmd")
 	go func() {
-		<-sigCh
-		p.Send(tui.StopMsg{})
+		for sig := range sigCh {
+			switch sig {
+			case signalUSR1:
+				// Read and process spike command
+				if cmdData, err := os.ReadFile(cmdPath); err == nil {
+					var cmd struct {
+						Type     string        `json:"type"`
+						Factor   float64       `json:"factor,omitempty"`
+						Duration time.Duration `json:"duration,omitempty"`
+					}
+					if json.Unmarshal(cmdData, &cmd) == nil && cmd.Type == "spike" {
+						p.Send(tui.SpikeMsg{Factor: cmd.Factor, Duration: cmd.Duration})
+					}
+					os.Remove(cmdPath)
+				}
+			case syscall.SIGTERM, syscall.SIGINT:
+				p.Send(tui.StopMsg{})
+				return
+			}
+		}
 	}()
 
 	finalModel, err := p.Run()
@@ -117,14 +138,17 @@ func buildConfigFromTUI(tuiConfig map[string]string) *config.Config {
 	spikeFactor, _ := strconv.ParseFloat(tuiConfig["spike_factor"], 64)
 	noiseAmp, _ := strconv.ParseFloat(tuiConfig["noise_amp"], 64)
 
+	// Parse spike interval
+	var spikeInterval time.Duration
+	if tuiConfig["spike_interval"] != "" {
+		spikeInterval, _ = time.ParseDuration(tuiConfig["spike_interval"])
+	}
+
 	if baseTPS == 0 {
 		baseTPS = 100
 	}
 	if maxTPS == 0 {
 		maxTPS = 1000
-	}
-	if lambda == 0 {
-		lambda = 0.1
 	}
 	if spikeFactor == 0 {
 		spikeFactor = 3.0
@@ -147,7 +171,17 @@ func buildConfigFromTUI(tuiConfig map[string]string) *config.Config {
 
 	cfg.Controller.BaseTPS = baseTPS
 	cfg.Controller.MaxTPS = maxTPS
-	cfg.Pattern.Poisson.Lambda = lambda
+
+	// Use interval if set, otherwise use lambda
+	if spikeInterval > 0 {
+		cfg.Pattern.Poisson.Interval = spikeInterval
+		cfg.Pattern.Poisson.Lambda = 0 // Will be calculated from interval
+	} else if lambda > 0 {
+		cfg.Pattern.Poisson.Lambda = lambda
+	} else {
+		cfg.Pattern.Poisson.Lambda = 0.1 // default
+	}
+
 	cfg.Pattern.Poisson.SpikeFactor = spikeFactor
 	cfg.Pattern.Noise.Amplitude = noiseAmp
 
