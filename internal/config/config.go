@@ -57,7 +57,8 @@ type Pattern struct {
 // Poisson configures Poisson spike generation.
 type Poisson struct {
 	Enabled     bool          `yaml:"enabled"`
-	Lambda      float64       `yaml:"lambda"`
+	Lambda      float64       `yaml:"lambda"`                // Events per second (e.g., 0.1 = every 10s)
+	Interval    time.Duration `yaml:"interval,omitempty"`    // Alternative to lambda: direct interval (e.g., "2h")
 	SpikeFactor float64       `yaml:"spike_factor"`
 	MinInterval time.Duration `yaml:"min_interval"`
 	MaxInterval time.Duration `yaml:"max_interval"`
