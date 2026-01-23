@@ -76,36 +76,75 @@ This launches the interactive TUI with a 4-step configuration flow:
 3. **Pattern Configuration** - Poisson Lambda, Spike Factor, Noise Amplitude, Schedule
 4. **Review & Fire** - Review settings and pull the trigger!
 
+#### TUI Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `↓` | Next field |
+| `Shift+Tab` / `↑` | Previous field |
+| `Enter` | Next screen / Select |
+| `Esc` | Previous screen |
+| `Q` or `Ctrl+C` | Stop and show report (on Running screen) |
+
+#### Test Report
+
+When you stop the test (`Q` or `Ctrl+C`), a detailed report is displayed:
+
+- **Overview**: Duration, total requests, success rate, avg/peak TPS
+- **Latency Distribution**: Min, Avg, Max, P50, P95, P99
+- **Latency Histogram**: Visual distribution of response times
+- **Status Codes**: Count by HTTP status code
+- **Timeline Summary**: 5-second interval breakdown with spike detection
+
+### Real-time Logs
+
+Monitor events in real-time while test is running:
+
+```bash
+# In another terminal
+kar logs -f
+
+# Or directly
+tail -f /tmp/kar98k/kar98k.log
+```
+
+Log events include:
+- `EVENT: SPIKE START/END` - Spike detection
+- `EVENT: New peak TPS` - New peak TPS reached
+- `STATUS:` - Periodic status (every 10s)
+- `WARNING:` - Error spikes
+- `SUMMARY:` - Final summary on stop
+
+### Stop Running Test
+
+```bash
+# From another terminal
+kar stop
+```
+
+This will:
+1. Send stop signal to running kar instance
+2. Display test report in the running terminal
+3. Show summary in the stop terminal
+
 ### Headless Mode
 
 Run with a config file for automation:
 
 ```bash
-kar run --config kar98k.yaml
+kar run --config kar.yaml
 ```
 
-### Daemon Mode
+### Demo Server
 
-Run as a background service:
+A demo HTTP server is included for testing:
 
 ```bash
-# Start daemon
-kar start --daemon
+# Build and run demo server
+make run-server
 
-# Check status
-kar status
-
-# View logs
-kar logs -f
-
-# Trigger traffic
-kar trigger
-
-# Pause traffic
-kar pause
-
-# Stop daemon
-kar stop
+# Server runs at http://localhost:8080
+# Endpoints: /health, /api/users, /api/stats, /api/echo
 ```
 
 ## Commands
@@ -113,13 +152,11 @@ kar stop
 | Command | Description |
 |---------|-------------|
 | `kar start` | Launch interactive TUI |
-| `kar start --daemon` | Start as background daemon |
 | `kar run --config <file>` | Run headless with config file |
-| `kar status` | Show daemon status |
-| `kar logs [-f]` | View logs (with optional follow) |
-| `kar trigger` | Start traffic generation |
-| `kar pause` | Pause traffic generation |
-| `kar stop` | Stop the daemon |
+| `kar stop` | Stop running kar instance |
+| `kar logs` | View recent logs |
+| `kar logs -f` | Follow logs in real-time |
+| `kar logs -n 50` | Show last 50 lines |
 | `kar version` | Show version info |
 
 ## Configuration File

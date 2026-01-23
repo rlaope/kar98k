@@ -76,36 +76,75 @@ kar start
 3. **패턴 설정** - Poisson Lambda, Spike Factor, Noise Amplitude, 스케줄
 4. **검토 & 실행** - 설정 확인 후 트리거 당기기!
 
+#### TUI 키보드 단축키
+
+| 키 | 동작 |
+|----|------|
+| `Tab` / `↓` | 다음 필드 |
+| `Shift+Tab` / `↑` | 이전 필드 |
+| `Enter` | 다음 화면 / 선택 |
+| `Esc` | 이전 화면 |
+| `Q` 또는 `Ctrl+C` | 종료 후 리포트 표시 (Running 화면에서) |
+
+#### 테스트 리포트
+
+테스트 종료 시 (`Q` 또는 `Ctrl+C`) 상세 리포트가 표시됩니다:
+
+- **Overview**: 테스트 시간, 총 요청 수, 성공률, 평균/최대 TPS
+- **Latency Distribution**: Min, Avg, Max, P50, P95, P99
+- **Latency Histogram**: 응답 시간 분포 시각화
+- **Status Codes**: HTTP 상태 코드별 카운트
+- **Timeline Summary**: 5초 간격 상세 내역 (spike 감지 포함)
+
+### 실시간 로그
+
+테스트 실행 중 다른 터미널에서 이벤트 모니터링:
+
+```bash
+# 다른 터미널에서
+kar logs -f
+
+# 또는 직접
+tail -f /tmp/kar98k/kar98k.log
+```
+
+로그 이벤트 종류:
+- `EVENT: SPIKE START/END` - 스파이크 감지
+- `EVENT: New peak TPS` - 새로운 최고 TPS
+- `STATUS:` - 주기적 상태 (10초마다)
+- `WARNING:` - 에러 급증
+- `SUMMARY:` - 종료 시 최종 요약
+
+### 실행 중인 테스트 중지
+
+```bash
+# 다른 터미널에서
+kar stop
+```
+
+실행 결과:
+1. 실행 중인 kar 인스턴스에 중지 신호 전송
+2. 실행 중이던 터미널에 테스트 리포트 표시
+3. stop 명령을 실행한 터미널에 요약 표시
+
 ### Headless 모드
 
 자동화를 위해 설정 파일로 실행:
 
 ```bash
-kar run --config kar98k.yaml
+kar run --config kar.yaml
 ```
 
-### 데몬 모드
+### 데모 서버
 
-백그라운드 서비스로 실행:
+테스트용 데모 HTTP 서버가 포함되어 있습니다:
 
 ```bash
-# 데몬 시작
-kar start --daemon
+# 데모 서버 빌드 및 실행
+make run-server
 
-# 상태 확인
-kar status
-
-# 로그 보기
-kar logs -f
-
-# 트래픽 시작
-kar trigger
-
-# 트래픽 일시정지
-kar pause
-
-# 데몬 중지
-kar stop
+# 서버 주소: http://localhost:8080
+# 엔드포인트: /health, /api/users, /api/stats, /api/echo
 ```
 
 ## 명령어
@@ -113,13 +152,11 @@ kar stop
 | 명령어 | 설명 |
 |--------|------|
 | `kar start` | 인터랙티브 TUI 실행 |
-| `kar start --daemon` | 백그라운드 데몬으로 시작 |
 | `kar run --config <file>` | 설정 파일로 headless 실행 |
-| `kar status` | 데몬 상태 확인 |
-| `kar logs [-f]` | 로그 보기 (-f: 실시간) |
-| `kar trigger` | 트래픽 생성 시작 |
-| `kar pause` | 트래픽 생성 일시정지 |
-| `kar stop` | 데몬 중지 |
+| `kar stop` | 실행 중인 kar 중지 |
+| `kar logs` | 최근 로그 보기 |
+| `kar logs -f` | 실시간 로그 보기 |
+| `kar logs -n 50` | 마지막 50줄 보기 |
 | `kar version` | 버전 정보 |
 
 ## 설정 파일 예시
