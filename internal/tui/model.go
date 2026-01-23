@@ -111,15 +111,16 @@ type Model struct {
 	startTime    time.Time
 
 	// Configuration state
-	TargetURL     string
-	TargetMethod  string
-	Protocol      string
-	BaseTPS       string
-	MaxTPS        string
-	PoissonLambda string
-	SpikeFactor   string
-	NoiseAmp      string
-	Schedule      string
+	TargetURL      string
+	TargetMethod   string
+	Protocol       string
+	BaseTPS        string
+	MaxTPS         string
+	PoissonLambda  string
+	SpikeInterval  string // Alternative to lambda: "30s", "5m", "2h"
+	SpikeFactor    string
+	NoiseAmp       string
+	Schedule       string
 
 	// Runtime state
 	CurrentTPS   float64
@@ -144,6 +145,11 @@ type Model struct {
 	lastErrorCount int64
 	loggedStart    bool
 
+	// Manual spike state
+	ManualSpiking       bool
+	ManualSpikeFactor   float64
+	ManualSpikeEndTime  time.Time
+
 	// Final report data
 	Report ReportData
 }
@@ -156,7 +162,8 @@ func NewModel() Model {
 		Protocol:      "http",
 		BaseTPS:       "100",
 		MaxTPS:        "1000",
-		PoissonLambda: "0.1",
+		PoissonLambda: "",
+		SpikeInterval: "10s",
 		SpikeFactor:   "3.0",
 		NoiseAmp:      "0.15",
 		statusCodes:   make(map[int]int64),
@@ -165,70 +172,76 @@ func NewModel() Model {
 		slotLatencies: make([]float64, 0),
 	}
 
-	// Create text inputs
-	m.inputs = make([]textinput.Model, 9)
+	// Create text inputs (10 total)
+	m.inputs = make([]textinput.Model, 10)
 
-	// Target URL
+	// Target URL [0]
 	m.inputs[0] = textinput.New()
 	m.inputs[0].Placeholder = "http://localhost:8080/api/health"
 	m.inputs[0].Focus()
 	m.inputs[0].CharLimit = 256
 	m.inputs[0].Width = 50
 
-	// Method
+	// Method [1]
 	m.inputs[1] = textinput.New()
 	m.inputs[1].Placeholder = "GET"
 	m.inputs[1].SetValue("GET")
 	m.inputs[1].CharLimit = 10
 	m.inputs[1].Width = 10
 
-	// Protocol
+	// Protocol [2]
 	m.inputs[2] = textinput.New()
 	m.inputs[2].Placeholder = "http"
 	m.inputs[2].SetValue("http")
 	m.inputs[2].CharLimit = 10
 	m.inputs[2].Width = 10
 
-	// Base TPS
+	// Base TPS [3]
 	m.inputs[3] = textinput.New()
 	m.inputs[3].Placeholder = "100"
 	m.inputs[3].SetValue("100")
 	m.inputs[3].CharLimit = 10
 	m.inputs[3].Width = 10
 
-	// Max TPS
+	// Max TPS [4]
 	m.inputs[4] = textinput.New()
 	m.inputs[4].Placeholder = "1000"
 	m.inputs[4].SetValue("1000")
 	m.inputs[4].CharLimit = 10
 	m.inputs[4].Width = 10
 
-	// Poisson Lambda
+	// Spike Interval [5] - new intuitive field
 	m.inputs[5] = textinput.New()
-	m.inputs[5].Placeholder = "0.1"
-	m.inputs[5].SetValue("0.1")
+	m.inputs[5].Placeholder = "10s"
+	m.inputs[5].SetValue("10s")
 	m.inputs[5].CharLimit = 10
 	m.inputs[5].Width = 10
 
-	// Spike Factor
+	// Spike Factor [6]
 	m.inputs[6] = textinput.New()
 	m.inputs[6].Placeholder = "3.0"
 	m.inputs[6].SetValue("3.0")
 	m.inputs[6].CharLimit = 10
 	m.inputs[6].Width = 10
 
-	// Noise Amplitude
+	// Noise Amplitude [7]
 	m.inputs[7] = textinput.New()
 	m.inputs[7].Placeholder = "0.15"
 	m.inputs[7].SetValue("0.15")
 	m.inputs[7].CharLimit = 10
 	m.inputs[7].Width = 10
 
-	// Schedule
+	// Schedule [8]
 	m.inputs[8] = textinput.New()
 	m.inputs[8].Placeholder = "9-17:1.5, 0-5:0.3"
 	m.inputs[8].CharLimit = 100
 	m.inputs[8].Width = 30
+
+	// Poisson Lambda [9] - kept for advanced users (optional)
+	m.inputs[9] = textinput.New()
+	m.inputs[9].Placeholder = "(optional, overrides interval)"
+	m.inputs[9].CharLimit = 10
+	m.inputs[9].Width = 20
 
 	return m
 }
@@ -243,6 +256,12 @@ type tickMsg time.Time
 
 // StopMsg is sent when kar stop is called
 type StopMsg struct{}
+
+// SpikeMsg is sent when kar spike is called
+type SpikeMsg struct {
+	Factor   float64
+	Duration time.Duration
+}
 
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
@@ -312,6 +331,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Quit
+
+	case SpikeMsg:
+		// Handle manual spike command
+		if m.screen == ScreenRunning {
+			factor := msg.Factor
+			if factor == 0 {
+				factor = 3.0 // default spike factor
+			}
+			duration := msg.Duration
+			if duration == 0 {
+				duration = 15 * time.Second // default duration
+			}
+
+			m.ManualSpiking = true
+			m.ManualSpikeFactor = factor
+			m.ManualSpikeEndTime = time.Now().Add(duration)
+
+			Log("EVENT: MANUAL SPIKE triggered (factor=%.1fx, duration=%s)", factor, duration)
+		}
+		return m, nil
 	}
 
 	// Handle text input
@@ -341,10 +380,11 @@ func (m *Model) handleEnter() (tea.Model, tea.Cmd) {
 		m.screen = ScreenPatternConfig
 		m.focusIndex = 0
 	case ScreenPatternConfig:
-		m.PoissonLambda = m.inputs[5].Value()
+		m.SpikeInterval = m.inputs[5].Value()
 		m.SpikeFactor = m.inputs[6].Value()
 		m.NoiseAmp = m.inputs[7].Value()
 		m.Schedule = m.inputs[8].Value()
+		m.PoissonLambda = m.inputs[9].Value() // optional override
 		m.screen = ScreenReview
 		m.cursor = 0
 	case ScreenReview:
@@ -376,7 +416,7 @@ func (m *Model) handleNext() (tea.Model, tea.Cmd) {
 		m.inputs[3+m.focusIndex].Focus()
 	case ScreenPatternConfig:
 		m.inputs[5+m.focusIndex].Blur()
-		m.focusIndex = (m.focusIndex + 1) % 4
+		m.focusIndex = (m.focusIndex + 1) % 5 // 5 fields now
 		m.inputs[5+m.focusIndex].Focus()
 	case ScreenReview:
 		m.cursor = (m.cursor + 1) % 2
@@ -396,7 +436,7 @@ func (m *Model) handlePrev() (tea.Model, tea.Cmd) {
 		m.inputs[3+m.focusIndex].Focus()
 	case ScreenPatternConfig:
 		m.inputs[5+m.focusIndex].Blur()
-		m.focusIndex = (m.focusIndex - 1 + 4) % 4
+		m.focusIndex = (m.focusIndex - 1 + 5) % 5 // 5 fields now
 		m.inputs[5+m.focusIndex].Focus()
 	case ScreenReview:
 		m.cursor = (m.cursor - 1 + 2) % 2
@@ -438,10 +478,21 @@ func (m *Model) updateRunningStats() {
 	noise := (float64(m.spinnerFrame%20) - 10) / 10 * noiseAmp // -0.15 ~ +0.15
 	m.CurrentTPS = baseTPS * (1 + noise)                       // ~85 ~ 115
 
-	// Spike: ~6% chance, multiplies TPS by spike factor
-	m.IsSpiking = m.spinnerFrame%50 < 3
-	if m.IsSpiking {
-		m.CurrentTPS *= 3.0 // ~255 ~ 345 during spike
+	// Check if manual spike has ended
+	if m.ManualSpiking && time.Now().After(m.ManualSpikeEndTime) {
+		m.ManualSpiking = false
+		Log("EVENT: MANUAL SPIKE END - TPS returning to normal")
+	}
+
+	// Spike: manual spike takes priority, otherwise ~6% chance for auto spike
+	if m.ManualSpiking {
+		m.IsSpiking = true
+		m.CurrentTPS *= m.ManualSpikeFactor
+	} else {
+		m.IsSpiking = m.spinnerFrame%50 < 3
+		if m.IsSpiking {
+			m.CurrentTPS *= 3.0 // ~255 ~ 345 during spike
+		}
 	}
 
 	m.RequestsSent = int64(elapsed * baseTPS)
@@ -654,12 +705,12 @@ func (m Model) viewPatternConfig() string {
 	b.WriteString("\n\n")
 
 	content := lipgloss.JoinVertical(lipgloss.Left,
-		LabelStyle.Render("Poisson Lambda (spike frequency)"),
+		LabelStyle.Render("Spike Interval (time between spikes)"),
 		m.renderInput(5, m.focusIndex == 0),
-		DimStyle.Render("  How often spikes occur (events per second)."),
-		DimStyle.Render("  ex) 0.1  = spike every ~10 sec (rare)"),
-		DimStyle.Render("  ex) 0.5  = spike every ~2 sec (frequent)"),
-		DimStyle.Render("  ex) 0.02 = spike every ~50 sec (very rare)"),
+		DimStyle.Render("  How often spikes occur. Use Go duration format."),
+		DimStyle.Render("  ex) 10s = spike every ~10 seconds"),
+		DimStyle.Render("  ex) 5m  = spike every ~5 minutes"),
+		DimStyle.Render("  ex) 2h  = spike every ~2 hours"),
 		"",
 		LabelStyle.Render("Spike Factor (TPS multiplier)"),
 		m.renderInput(6, m.focusIndex == 1),
@@ -671,17 +722,20 @@ func (m Model) viewPatternConfig() string {
 		m.renderInput(7, m.focusIndex == 2),
 		DimStyle.Render("  Random fluctuation around base TPS."),
 		DimStyle.Render("  ex) 0.1  = +/-10% (90~110 when base=100)"),
-		DimStyle.Render("  ex) 0.3  = +/-30% (70~130 when base=100)"),
 		"",
 		LabelStyle.Render("Schedule (optional)"),
 		m.renderInput(8, m.focusIndex == 3),
 		DimStyle.Render("  Time-based TPS multiplier. Format: hour-hour:factor"),
 		DimStyle.Render("  ex) 9-18:1.5  = 1.5x during 9AM-6PM"),
-		DimStyle.Render("  ex) 0-6:0.3   = 0.3x during midnight-6AM"),
+		"",
+		LabelStyle.Render("Lambda (advanced, optional)"),
+		m.renderInput(9, m.focusIndex == 4),
+		DimStyle.Render("  Overrides interval. Events per second."),
+		DimStyle.Render("  ex) 0.001 = spike every ~1000 sec (~17 min)"),
 	)
 
 	box := BorderStyle.Width(65).Render(content)
-	b.WriteString(lipgloss.Place(m.width, m.height-22, lipgloss.Center, lipgloss.Top, box))
+	b.WriteString(lipgloss.Place(m.width, m.height-26, lipgloss.Center, lipgloss.Top, box))
 
 	b.WriteString("\n\n")
 	b.WriteString(lipgloss.Place(m.width, 0, lipgloss.Center, lipgloss.Top,
@@ -702,6 +756,12 @@ func (m Model) viewReview() string {
 		targetURL = m.inputs[0].Placeholder
 	}
 
+	// Show interval or lambda depending on what's set
+	intervalStr := m.SpikeInterval
+	if m.PoissonLambda != "" {
+		intervalStr = "λ=" + m.PoissonLambda
+	}
+
 	configSummary := lipgloss.JoinVertical(lipgloss.Left,
 		SubtitleStyle.Render("Target"),
 		fmt.Sprintf("  %s %s %s", LabelStyle.Render("URL:"), ValueStyle.Render(targetURL), ""),
@@ -711,7 +771,7 @@ func (m Model) viewReview() string {
 		fmt.Sprintf("  %s %s TPS  %s %s TPS", LabelStyle.Render("Base:"), ValueStyle.Render(m.BaseTPS), LabelStyle.Render("Max:"), ValueStyle.Render(m.MaxTPS)),
 		"",
 		SubtitleStyle.Render("Pattern"),
-		fmt.Sprintf("  %s %s  %s %sx", LabelStyle.Render("Lambda:"), ValueStyle.Render(m.PoissonLambda), LabelStyle.Render("Spike:"), ValueStyle.Render(m.SpikeFactor)),
+		fmt.Sprintf("  %s %s  %s %sx", LabelStyle.Render("Interval:"), ValueStyle.Render(intervalStr), LabelStyle.Render("Spike:"), ValueStyle.Render(m.SpikeFactor)),
 		fmt.Sprintf("  %s ±%s%%", LabelStyle.Render("Noise:"), ValueStyle.Render(m.NoiseAmp)),
 	)
 
@@ -778,7 +838,9 @@ func (m Model) viewRunning() string {
 	}
 
 	var spikeIndicator string
-	if m.IsSpiking {
+	if m.ManualSpiking {
+		spikeIndicator = HighlightStyle.Render(fmt.Sprintf(" ◉ MANUAL SPIKE (%.1fx)", m.ManualSpikeFactor))
+	} else if m.IsSpiking {
 		spikeIndicator = WarningStyle.Render(" ⚡ SPIKE")
 	}
 
@@ -872,6 +934,7 @@ func (m Model) GetConfig() map[string]string {
 		"protocol":       m.Protocol,
 		"base_tps":       m.BaseTPS,
 		"max_tps":        m.MaxTPS,
+		"spike_interval": m.SpikeInterval,
 		"poisson_lambda": m.PoissonLambda,
 		"spike_factor":   m.SpikeFactor,
 		"noise_amp":      m.NoiseAmp,
