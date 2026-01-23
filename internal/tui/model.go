@@ -491,15 +491,19 @@ func (m Model) viewTargetSetup() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		LabelStyle.Render("Target URL"),
 		m.renderInput(0, m.focusIndex == 0),
+		DimStyle.Render("  The endpoint to test. Include full path."),
+		DimStyle.Render("  ex) http://localhost:8080/api/health"),
 		"",
 		LabelStyle.Render("HTTP Method"),
 		m.renderInput(1, m.focusIndex == 1),
+		DimStyle.Render("  GET: read data, POST: create, PUT: update, DELETE: remove"),
 		"",
-		LabelStyle.Render("Protocol (http/http2/grpc)"),
+		LabelStyle.Render("Protocol"),
 		m.renderInput(2, m.focusIndex == 2),
+		DimStyle.Render("  http: HTTP/1.1, http2: HTTP/2, grpc: gRPC protocol"),
 	)
 
-	box := BorderStyle.Width(60).Render(content)
+	box := BorderStyle.Width(65).Render(content)
 	b.WriteString(lipgloss.Place(m.width, m.height-15, lipgloss.Center, lipgloss.Top, box))
 
 	b.WriteString("\n\n")
@@ -519,14 +523,18 @@ func (m Model) viewTrafficConfig() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		LabelStyle.Render("Base TPS (Transactions Per Second)"),
 		m.renderInput(3, m.focusIndex == 0),
-		DimStyle.Render("  The baseline traffic rate"),
+		DimStyle.Render("  Normal traffic rate. This is your baseline load."),
+		DimStyle.Render("  ex) 100 = 100 requests/sec (6,000 req/min)"),
+		DimStyle.Render("  ex) 500 = 500 requests/sec (30,000 req/min)"),
 		"",
 		LabelStyle.Render("Max TPS"),
 		m.renderInput(4, m.focusIndex == 1),
-		DimStyle.Render("  Maximum TPS cap during spikes"),
+		DimStyle.Render("  Upper limit during spike events."),
+		DimStyle.Render("  ex) Base=100, Max=1000 -> spikes can reach 10x"),
+		DimStyle.Render("  ex) Base=100, Max=300  -> spikes capped at 3x"),
 	)
 
-	box := BorderStyle.Width(60).Render(content)
+	box := BorderStyle.Width(65).Render(content)
 	b.WriteString(lipgloss.Place(m.width, m.height-15, lipgloss.Center, lipgloss.Top, box))
 
 	b.WriteString("\n\n")
@@ -546,23 +554,32 @@ func (m Model) viewPatternConfig() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		LabelStyle.Render("Poisson Lambda (spike frequency)"),
 		m.renderInput(5, m.focusIndex == 0),
-		DimStyle.Render("  Average spikes per second (e.g., 0.1)"),
+		DimStyle.Render("  How often spikes occur (events per second)."),
+		DimStyle.Render("  ex) 0.1  = spike every ~10 sec (rare)"),
+		DimStyle.Render("  ex) 0.5  = spike every ~2 sec (frequent)"),
+		DimStyle.Render("  ex) 0.02 = spike every ~50 sec (very rare)"),
 		"",
 		LabelStyle.Render("Spike Factor (TPS multiplier)"),
 		m.renderInput(6, m.focusIndex == 1),
-		DimStyle.Render("  How much TPS increases during spikes"),
+		DimStyle.Render("  TPS multiplier when spike occurs."),
+		DimStyle.Render("  ex) 2.0 = 2x during spike (100 -> 200 TPS)"),
+		DimStyle.Render("  ex) 5.0 = 5x during spike (100 -> 500 TPS)"),
 		"",
 		LabelStyle.Render("Noise Amplitude"),
 		m.renderInput(7, m.focusIndex == 2),
-		DimStyle.Render("  Random fluctuation range (0.15 = ±15%)"),
+		DimStyle.Render("  Random fluctuation around base TPS."),
+		DimStyle.Render("  ex) 0.1  = +/-10% (90~110 when base=100)"),
+		DimStyle.Render("  ex) 0.3  = +/-30% (70~130 when base=100)"),
 		"",
-		LabelStyle.Render("Schedule (optional: hour-range:multiplier)"),
+		LabelStyle.Render("Schedule (optional)"),
 		m.renderInput(8, m.focusIndex == 3),
-		DimStyle.Render("  e.g., 9-17:1.5, 0-5:0.3"),
+		DimStyle.Render("  Time-based TPS multiplier. Format: hour-hour:factor"),
+		DimStyle.Render("  ex) 9-18:1.5  = 1.5x during 9AM-6PM"),
+		DimStyle.Render("  ex) 0-6:0.3   = 0.3x during midnight-6AM"),
 	)
 
-	box := BorderStyle.Width(60).Render(content)
-	b.WriteString(lipgloss.Place(m.width, m.height-18, lipgloss.Center, lipgloss.Top, box))
+	box := BorderStyle.Width(65).Render(content)
+	b.WriteString(lipgloss.Place(m.width, m.height-22, lipgloss.Center, lipgloss.Top, box))
 
 	b.WriteString("\n\n")
 	b.WriteString(lipgloss.Place(m.width, 0, lipgloss.Center, lipgloss.Top,
