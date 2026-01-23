@@ -35,6 +35,12 @@ func runStart(cmd *cobra.Command, args []string) error {
 		return nil
 	}
 
+	// Initialize logger
+	if err := tui.InitLogger(); err != nil {
+		return fmt.Errorf("failed to init logger: %w", err)
+	}
+	defer tui.CloseLogger()
+
 	// Run the TUI
 	m := tui.NewModel()
 	p := tea.NewProgram(m, tea.WithAltScreen())
