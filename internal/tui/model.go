@@ -250,8 +250,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(SpinnerFrames)
-		if m.triggered {
-			// Simulate updating stats
+		// Only update stats on Running screen, not Report screen
+		if m.triggered && m.screen == ScreenRunning {
 			m.updateRunningStats()
 		}
 		return m, tickCmd()
@@ -361,11 +361,22 @@ func (m *Model) updateInputs(msg tea.Msg) tea.Cmd {
 
 func (m *Model) updateRunningStats() {
 	elapsed := time.Since(m.startTime).Seconds()
-	m.CurrentTPS = 100 + 50*float64(m.spinnerFrame%10)
-	m.RequestsSent = int64(elapsed * 100)
+
+	// Base TPS with small noise (±15%)
+	baseTPS := 100.0
+	noiseAmp := 0.15
+	noise := (float64(m.spinnerFrame%20) - 10) / 10 * noiseAmp // -0.15 ~ +0.15
+	m.CurrentTPS = baseTPS * (1 + noise)                       // ~85 ~ 115
+
+	// Spike: ~6% chance, multiplies TPS by spike factor
+	m.IsSpiking = m.spinnerFrame%50 < 3
+	if m.IsSpiking {
+		m.CurrentTPS *= 3.0 // ~255 ~ 345 during spike
+	}
+
+	m.RequestsSent = int64(elapsed * baseTPS)
 	m.ErrorCount = int64(elapsed * 0.5)
 	m.AvgLatency = 15 + float64(m.spinnerFrame%5)
-	m.IsSpiking = m.spinnerFrame%50 < 3 // ~6% spike rate
 
 	// Track peak TPS
 	if m.CurrentTPS > m.peakTPS {
@@ -964,10 +975,10 @@ func (m Model) renderLatencyHistogram(dist []LatencyBucket) string {
 
 		bar := ""
 		for i := 0; i < barLen; i++ {
-			bar += "█"
+			bar += "="
 		}
 		for i := barLen; i < barWidth; i++ {
-			bar += "░"
+			bar += "-"
 		}
 
 		b.WriteString(fmt.Sprintf("  %9s %s %d\n",
@@ -1049,9 +1060,9 @@ func (m Model) renderTimeChart(slots []TimeSlot) string {
 		for i := 0; i < chartWidth && i < len(slots); i++ {
 			if slots[i].TPS >= threshold {
 				if slots[i].Errors > 0 {
-					line += ErrorStyle.Render("▓")
+					line += ErrorStyle.Render("#")
 				} else {
-					line += ProgressBarStyle.Render("█")
+					line += ProgressBarStyle.Render("|")
 				}
 			} else {
 				line += " "
