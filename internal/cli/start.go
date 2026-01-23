@@ -15,8 +15,8 @@ import (
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Launch interactive configuration and start kar98k",
-	Long: `Launch the interactive TUI to configure kar98k.
+	Short: "Launch interactive configuration and start kar",
+	Long: `Launch the interactive TUI to configure kar.
 Walk through target setup, traffic configuration, and pattern settings,
 then pull the trigger to start generating traffic.`,
 	RunE: runStart,
@@ -29,9 +29,9 @@ func init() {
 func runStart(cmd *cobra.Command, args []string) error {
 	// Check if already running
 	if daemon.IsRunning() {
-		fmt.Println("\n⚠️  kar98k is already running!")
-		fmt.Println("   Use 'kar98k status' to check status")
-		fmt.Println("   Use 'kar98k stop' to stop the running instance")
+		fmt.Println("\n⚠️  kar is already running!")
+		fmt.Println("   Use 'kar status' to check status")
+		fmt.Println("   Use 'kar stop' to stop the running instance")
 		return nil
 	}
 
@@ -58,18 +58,18 @@ func runStart(cmd *cobra.Command, args []string) error {
 	cfg := buildConfigFromTUI(tuiConfig)
 
 	// Start daemon in background
-	fmt.Println("\n🚀 Starting kar98k daemon...")
+	fmt.Println("\n🚀 Starting kar daemon...")
 
 	// Fork to background
 	if err := startDaemon(cfg); err != nil {
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	fmt.Println("✅ kar98k is now running in the background!")
+	fmt.Println("✅ kar is now running in the background!")
 	fmt.Println("")
-	fmt.Println("   📊 Status:  kar98k status")
-	fmt.Println("   📜 Logs:    kar98k logs -f")
-	fmt.Println("   🛑 Stop:    kar98k stop")
+	fmt.Println("   📊 Status:  kar status")
+	fmt.Println("   📜 Logs:    kar logs -f")
+	fmt.Println("   🛑 Stop:    kar stop")
 	fmt.Println("")
 
 	return nil

@@ -365,7 +365,7 @@ func (m *Model) updateRunningStats() {
 	m.RequestsSent = int64(elapsed * 100)
 	m.ErrorCount = int64(elapsed * 0.5)
 	m.AvgLatency = 15 + float64(m.spinnerFrame%5)
-	m.IsSpiking = m.spinnerFrame%20 < 5
+	m.IsSpiking = m.spinnerFrame%50 < 3 // ~6% spike rate
 
 	// Track peak TPS
 	if m.CurrentTPS > m.peakTPS {
@@ -378,10 +378,10 @@ func (m *Model) updateRunningStats() {
 	m.slotLatencies = append(m.slotLatencies, simulatedLatency)
 
 	// Simulate status codes
-	if m.spinnerFrame%20 == 0 {
-		m.statusCodes[500]++
-	} else if m.spinnerFrame%10 == 0 {
-		m.statusCodes[429]++
+	if m.spinnerFrame%100 == 0 {
+		m.statusCodes[500]++ // ~1% server error
+	} else if m.spinnerFrame%50 == 0 {
+		m.statusCodes[429]++ // ~2% rate limit
 	} else {
 		m.statusCodes[200]++
 	}
@@ -1069,12 +1069,18 @@ func (m Model) renderTimeChart(slots []TimeSlot) string {
 	}
 
 	// X-axis
-	b.WriteString("      " + DimStyle.Render(strings.Repeat("─", chartWidth)))
-	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("      %s%s%s",
-		DimStyle.Render("start"),
-		strings.Repeat(" ", chartWidth-9),
-		DimStyle.Render("end")))
+	if chartWidth > 0 {
+		b.WriteString("      " + DimStyle.Render(strings.Repeat("─", chartWidth)))
+		b.WriteString("\n")
+		spacing := chartWidth - 9
+		if spacing < 0 {
+			spacing = 0
+		}
+		b.WriteString(fmt.Sprintf("      %s%s%s",
+			DimStyle.Render("start"),
+			strings.Repeat(" ", spacing),
+			DimStyle.Render("end")))
+	}
 
 	return b.String()
 }

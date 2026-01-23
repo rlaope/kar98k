@@ -20,13 +20,13 @@ var (
 
 var logsCmd = &cobra.Command{
 	Use:   "logs",
-	Short: "View kar98k logs",
-	Long: `View logs from the kar98k daemon.
+	Short: "View kar logs",
+	Long: `View logs from the kar daemon.
 
 Examples:
-  kar98k logs          Show recent logs
-  kar98k logs -f       Follow logs in real-time
-  kar98k logs -n 50    Show last 50 lines`,
+  kar logs          Show recent logs
+  kar logs -f       Follow logs in real-time
+  kar logs -n 50    Show last 50 lines`,
 	RunE: runLogs,
 }
 
@@ -43,7 +43,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	if _, err := os.Stat(logPath); os.IsNotExist(err) {
 		fmt.Println()
 		fmt.Println(tui.WarningStyle.Render("  No logs found"))
-		fmt.Println(tui.DimStyle.Render("  kar98k may not have been started yet"))
+		fmt.Println(tui.DimStyle.Render("  kar may not have been started yet"))
 		fmt.Println()
 		return nil
 	}
@@ -55,7 +55,7 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	defer file.Close()
 
 	fmt.Println()
-	fmt.Println(tui.TitleStyle.Render(" kar98k logs "))
+	fmt.Println(tui.TitleStyle.Render(" kar logs "))
 	fmt.Println(tui.DimStyle.Render(fmt.Sprintf(" %s", logPath)))
 	fmt.Println(tui.Divider(50))
 	fmt.Println()
