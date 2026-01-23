@@ -157,17 +157,17 @@ func ProgressBar(percent float64, width int) string {
 
 	bar := ""
 	for i := 0; i < filled; i++ {
-		bar += "█"
+		bar += "="
 	}
 	for i := 0; i < empty; i++ {
-		bar += "░"
+		bar += "-"
 	}
 
 	return ProgressBarStyle.Render(bar[:filled]) + ProgressEmptyStyle.Render(bar[filled:])
 }
 
-// Spinner frames for loading animation
-var SpinnerFrames = []string{"⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"}
+// Spinner frames for loading animation (ASCII compatible)
+var SpinnerFrames = []string{"|", "/", "-", "\\", "|", "/", "-", "\\", "|", "/"}
 
 // Bullet points
 const (
