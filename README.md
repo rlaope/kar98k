@@ -13,7 +13,8 @@ kar98k generates realistic, irregular traffic patterns for load testing and perf
 - **Irregular Traffic Patterns**: Poisson-distributed spikes with micro-fluctuations
 - **Time-of-Day Scheduling**: Configure different TPS profiles for different hours
 - **Real-time Monitoring**: Live stats dashboard while traffic is flowing
-- **Daemon Mode**: Run as background service with status/logs commands
+- **Test Report**: Detailed statistics with latency distribution (P50/P95/P99)
+- **Real-time Logs**: Event logging with spike detection and peak TPS tracking
 
 ## Installation
 
@@ -125,7 +126,49 @@ Watch real-time stats as traffic flows:
 - Current TPS with progress bar
 - Requests sent / Errors / Avg Latency
 - Elapsed time
-- Press `ENTER` to pause/resume, `Q` to stop
+
+#### Keyboard Shortcuts
+
+| Key | Action |
+|-----|--------|
+| `Tab` / `↓` | Next field |
+| `Shift+Tab` / `↑` | Previous field |
+| `Enter` | Next screen / Select |
+| `Esc` | Previous screen |
+| `Q` or `Ctrl+C` | Stop and show report (on Running screen) |
+
+#### Test Report
+
+When you stop the test (`Q` or `Ctrl+C`), a detailed report is displayed:
+
+- **Overview**: Duration, total requests, success rate, avg/peak TPS
+- **Latency Distribution**: Min, Avg, Max, P50, P95, P99
+- **Latency Histogram**: Visual distribution of response times
+- **Status Codes**: Count by HTTP status code
+- **Timeline Summary**: 5-second interval breakdown with spike detection
+
+### Real-time Logs
+
+Monitor events while test is running (in another terminal):
+
+```bash
+kar logs -f
+```
+
+Log events include:
+- `EVENT: SPIKE START/END` - Spike detection
+- `EVENT: New peak TPS` - New peak TPS reached
+- `STATUS:` - Periodic status (every 10s)
+- `WARNING:` - Error spikes
+- `SUMMARY:` - Final summary on stop
+
+### Stop Running Test
+
+```bash
+kar stop
+```
+
+This sends a stop signal to the running kar instance and displays the test report.
 
 ### Headless Mode
 
@@ -135,28 +178,16 @@ Run with a config file for automation:
 kar run --config configs/kar98k.yaml
 ```
 
-### Daemon Mode
+### Demo Server
 
-Run as a background service:
+A demo HTTP server is included for testing:
 
 ```bash
-# Start daemon
-kar start --daemon
+# Build and run demo server
+make run-server
 
-# Check status
-kar status
-
-# View logs
-kar logs -f
-
-# Trigger traffic
-kar trigger
-
-# Pause traffic
-kar pause
-
-# Stop daemon
-kar stop
+# Server runs at http://localhost:8080
+# Endpoints: /health, /api/users, /api/stats, /api/echo
 ```
 
 ## Commands
@@ -164,42 +195,42 @@ kar stop
 | Command | Description |
 |---------|-------------|
 | `kar start` | Launch interactive TUI |
-| `kar start --daemon` | Start as background daemon |
 | `kar run --config <file>` | Run headless with config file |
-| `kar status` | Show daemon status |
-| `kar logs [-f]` | View logs (with optional follow) |
-| `kar trigger` | Start traffic generation |
-| `kar pause` | Pause traffic generation |
-| `kar stop` | Stop the daemon |
+| `kar stop` | Stop running kar instance |
+| `kar logs` | View recent logs |
+| `kar logs -f` | Follow logs in real-time |
+| `kar logs -n 50` | Show last 50 lines |
 | `kar version` | Show version info |
 
 ## Configuration File
 
-For headless/daemon mode, use a YAML config file:
+For headless mode, use a YAML config file:
 
 ```yaml
 targets:
-  - name: api-service
+  - name: my-api
     url: http://localhost:8080/api/health
     protocol: http
     method: GET
     weight: 100
+    timeout: 10s
 
 controller:
-  base_tps: 100
-  max_tps: 1000
-  schedule:
-    - hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]
-      tps_multiplier: 1.5
+  base_tps: 100      # 100 requests/sec baseline
+  max_tps: 500       # Cap at 500 during spikes
 
 pattern:
   poisson:
     enabled: true
-    lambda: 0.1
-    spike_factor: 3.0
+    lambda: 0.1       # ~10 seconds between spikes
+    spike_factor: 2.0 # 2x TPS during spikes
   noise:
     enabled: true
-    amplitude: 0.15
+    amplitude: 0.1    # ±10% random fluctuation
+
+metrics:
+  enabled: true
+  address: ":9090"
 ```
 
 ## Architecture
