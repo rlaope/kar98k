@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kar98k/internal/config"
@@ -15,8 +19,8 @@ import (
 
 var startCmd = &cobra.Command{
 	Use:   "start",
-	Short: "Launch interactive configuration and start kar98k",
-	Long: `Launch the interactive TUI to configure kar98k.
+	Short: "Launch interactive configuration and start kar",
+	Long: `Launch the interactive TUI to configure kar.
 Walk through target setup, traffic configuration, and pattern settings,
 then pull the trigger to start generating traffic.`,
 	RunE: runStart,
@@ -28,16 +32,47 @@ func init() {
 
 func runStart(cmd *cobra.Command, args []string) error {
 	// Check if already running
-	if daemon.IsRunning() {
-		fmt.Println("\n⚠️  kar98k is already running!")
-		fmt.Println("   Use 'kar98k status' to check status")
-		fmt.Println("   Use 'kar98k stop' to stop the running instance")
-		return nil
+	pidPath := filepath.Join(os.TempDir(), "kar98k", "kar98k.pid")
+	if pidData, err := os.ReadFile(pidPath); err == nil {
+		// PID file exists, check if process is actually running
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(pidData))); err == nil {
+			if process, err := os.FindProcess(pid); err == nil {
+				// On Unix, FindProcess always succeeds, so we need to send signal 0 to check
+				if err := process.Signal(syscall.Signal(0)); err == nil {
+					fmt.Println("\n⚠️  kar is already running!")
+					fmt.Println("   Use 'kar status' to check status")
+					fmt.Println("   Use 'kar stop' to stop the running instance")
+					return nil
+				}
+			}
+		}
+		// Process not running, clean up stale PID file
+		os.Remove(pidPath)
 	}
+
+	// Initialize logger
+	if err := tui.InitLogger(); err != nil {
+		return fmt.Errorf("failed to init logger: %w", err)
+	}
+	defer tui.CloseLogger()
+
+	// Create runtime directory and PID file
+	runtimeDir := filepath.Join(os.TempDir(), "kar98k")
+	os.MkdirAll(runtimeDir, 0755)
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+	defer os.Remove(pidPath)
 
 	// Run the TUI
 	m := tui.NewModel()
 	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	// Handle SIGTERM to show report before exit
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		p.Send(tui.StopMsg{})
+	}()
 
 	finalModel, err := p.Run()
 	if err != nil {
@@ -58,18 +93,18 @@ func runStart(cmd *cobra.Command, args []string) error {
 	cfg := buildConfigFromTUI(tuiConfig)
 
 	// Start daemon in background
-	fmt.Println("\n🚀 Starting kar98k daemon...")
+	fmt.Println("\n🚀 Starting kar daemon...")
 
 	// Fork to background
 	if err := startDaemon(cfg); err != nil {
 		return fmt.Errorf("failed to start daemon: %w", err)
 	}
 
-	fmt.Println("✅ kar98k is now running in the background!")
+	fmt.Println("✅ kar is now running in the background!")
 	fmt.Println("")
-	fmt.Println("   📊 Status:  kar98k status")
-	fmt.Println("   📜 Logs:    kar98k logs -f")
-	fmt.Println("   🛑 Stop:    kar98k stop")
+	fmt.Println("   📊 Status:  kar status")
+	fmt.Println("   📜 Logs:    kar logs -f")
+	fmt.Println("   🛑 Stop:    kar stop")
 	fmt.Println("")
 
 	return nil

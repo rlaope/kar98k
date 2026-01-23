@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -9,6 +11,37 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// Log file path
+var logFile *os.File
+
+// InitLogger initializes the log file
+func InitLogger() error {
+	dir := filepath.Join(os.TempDir(), "kar98k")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	var err error
+	logFile, err = os.OpenFile(filepath.Join(dir, "kar98k.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	return err
+}
+
+// CloseLogger closes the log file
+func CloseLogger() {
+	if logFile != nil {
+		logFile.Close()
+	}
+}
+
+// Log writes a message to the log file
+func Log(format string, args ...interface{}) {
+	if logFile == nil {
+		return
+	}
+	msg := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
+	logFile.WriteString(msg)
+	logFile.Sync()
+}
 
 // Screen represents different screens in the TUI
 type Screen int
@@ -104,6 +137,12 @@ type Model struct {
 	slotErrors    int64
 	slotLatencies []float64
 	statusCodes   map[int]int64
+
+	// For event logging
+	lastSpiking    bool
+	lastLoggedTPS  float64
+	lastErrorCount int64
+	loggedStart    bool
 
 	// Final report data
 	Report ReportData
@@ -202,6 +241,9 @@ func (m Model) Init() tea.Cmd {
 // tickMsg is sent every second
 type tickMsg time.Time
 
+// StopMsg is sent when kar stop is called
+type StopMsg struct{}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -213,18 +255,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-
-		case "q":
+		case "ctrl+c", "q":
+			// On Running screen, show report first
 			if m.screen == ScreenRunning {
+				Log("EVENT: Traffic generation stopped by user")
+				Log("SUMMARY: Duration=%s Requests=%d Errors=%d PeakTPS=%.0f",
+					time.Since(m.startTime).Round(time.Second), m.RequestsSent, m.ErrorCount, m.peakTPS)
 				m.generateReport()
 				m.screen = ScreenReport
 				return m, nil
 			}
+			// On Report screen, exit
 			if m.screen == ScreenReport {
 				return m, tea.Quit
 			}
+			// On other screens, just exit
 			return m, tea.Quit
 
 		case "enter":
@@ -250,11 +295,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tickMsg:
 		m.spinnerFrame = (m.spinnerFrame + 1) % len(SpinnerFrames)
-		if m.triggered {
-			// Simulate updating stats
+		// Only update stats on Running screen, not Report screen
+		if m.triggered && m.screen == ScreenRunning {
 			m.updateRunningStats()
 		}
 		return m, tickCmd()
+
+	case StopMsg:
+		// Handle kar stop command
+		if m.screen == ScreenRunning {
+			Log("EVENT: Traffic generation stopped by 'kar stop' command")
+			Log("SUMMARY: Duration=%s Requests=%d Errors=%d PeakTPS=%.0f",
+				time.Since(m.startTime).Round(time.Second), m.RequestsSent, m.ErrorCount, m.peakTPS)
+			m.generateReport()
+			m.screen = ScreenReport
+			return m, nil
+		}
+		return m, tea.Quit
 	}
 
 	// Handle text input
@@ -361,15 +418,71 @@ func (m *Model) updateInputs(msg tea.Msg) tea.Cmd {
 
 func (m *Model) updateRunningStats() {
 	elapsed := time.Since(m.startTime).Seconds()
-	m.CurrentTPS = 100 + 50*float64(m.spinnerFrame%10)
-	m.RequestsSent = int64(elapsed * 100)
+
+	// Log start event once
+	if !m.loggedStart {
+		m.loggedStart = true
+		targetURL := m.TargetURL
+		if targetURL == "" {
+			targetURL = m.inputs[0].Placeholder
+		}
+		Log("EVENT: Traffic generation started")
+		Log("CONFIG: Target=%s Method=%s Protocol=%s", targetURL, m.TargetMethod, m.Protocol)
+		Log("CONFIG: BaseTPS=%s MaxTPS=%s Lambda=%s SpikeFactor=%s Noise=%s",
+			m.BaseTPS, m.MaxTPS, m.PoissonLambda, m.SpikeFactor, m.NoiseAmp)
+	}
+
+	// Base TPS with small noise (±15%)
+	baseTPS := 100.0
+	noiseAmp := 0.15
+	noise := (float64(m.spinnerFrame%20) - 10) / 10 * noiseAmp // -0.15 ~ +0.15
+	m.CurrentTPS = baseTPS * (1 + noise)                       // ~85 ~ 115
+
+	// Spike: ~6% chance, multiplies TPS by spike factor
+	m.IsSpiking = m.spinnerFrame%50 < 3
+	if m.IsSpiking {
+		m.CurrentTPS *= 3.0 // ~255 ~ 345 during spike
+	}
+
+	m.RequestsSent = int64(elapsed * baseTPS)
 	m.ErrorCount = int64(elapsed * 0.5)
 	m.AvgLatency = 15 + float64(m.spinnerFrame%5)
-	m.IsSpiking = m.spinnerFrame%20 < 5
 
-	// Track peak TPS
+	// Track peak TPS and log new peak
 	if m.CurrentTPS > m.peakTPS {
 		m.peakTPS = m.CurrentTPS
+		Log("EVENT: New peak TPS=%.0f", m.peakTPS)
+	}
+
+	// Log spike start/end
+	if m.IsSpiking && !m.lastSpiking {
+		Log("EVENT: SPIKE START - TPS=%.0f (%.1fx base)", m.CurrentTPS, m.CurrentTPS/baseTPS)
+	}
+	if !m.IsSpiking && m.lastSpiking {
+		Log("EVENT: SPIKE END - TPS returning to %.0f", m.CurrentTPS)
+	}
+	m.lastSpiking = m.IsSpiking
+
+	// Log significant TPS changes (>20%)
+	if m.lastLoggedTPS > 0 {
+		change := (m.CurrentTPS - m.lastLoggedTPS) / m.lastLoggedTPS
+		if change > 0.2 || change < -0.2 {
+			Log("TPS: %.0f -> %.0f (%+.0f%%)", m.lastLoggedTPS, m.CurrentTPS, change*100)
+		}
+	}
+	m.lastLoggedTPS = m.CurrentTPS
+
+	// Log error increases
+	newErrors := m.ErrorCount - m.lastErrorCount
+	if newErrors > 5 {
+		Log("WARNING: %d new errors (total: %d)", newErrors, m.ErrorCount)
+	}
+	m.lastErrorCount = m.ErrorCount
+
+	// Periodic status log (every 10 seconds)
+	if int(elapsed)%10 == 0 && int(elapsed) > 0 && m.spinnerFrame%10 == 0 {
+		Log("STATUS: TPS=%.0f Requests=%d Errors=%d Latency=%.1fms",
+			m.CurrentTPS, m.RequestsSent, m.ErrorCount, m.AvgLatency)
 	}
 
 	// Simulate latency collection (in real impl, this comes from actual requests)
@@ -378,10 +491,10 @@ func (m *Model) updateRunningStats() {
 	m.slotLatencies = append(m.slotLatencies, simulatedLatency)
 
 	// Simulate status codes
-	if m.spinnerFrame%20 == 0 {
-		m.statusCodes[500]++
-	} else if m.spinnerFrame%10 == 0 {
-		m.statusCodes[429]++
+	if m.spinnerFrame%100 == 0 {
+		m.statusCodes[500]++ // ~1% server error
+	} else if m.spinnerFrame%50 == 0 {
+		m.statusCodes[429]++ // ~2% rate limit
 	} else {
 		m.statusCodes[200]++
 	}
@@ -480,15 +593,19 @@ func (m Model) viewTargetSetup() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		LabelStyle.Render("Target URL"),
 		m.renderInput(0, m.focusIndex == 0),
+		DimStyle.Render("  The endpoint to test. Include full path."),
+		DimStyle.Render("  ex) http://localhost:8080/api/health"),
 		"",
 		LabelStyle.Render("HTTP Method"),
 		m.renderInput(1, m.focusIndex == 1),
+		DimStyle.Render("  GET: read data, POST: create, PUT: update, DELETE: remove"),
 		"",
-		LabelStyle.Render("Protocol (http/http2/grpc)"),
+		LabelStyle.Render("Protocol"),
 		m.renderInput(2, m.focusIndex == 2),
+		DimStyle.Render("  http: HTTP/1.1, http2: HTTP/2, grpc: gRPC protocol"),
 	)
 
-	box := BorderStyle.Width(60).Render(content)
+	box := BorderStyle.Width(65).Render(content)
 	b.WriteString(lipgloss.Place(m.width, m.height-15, lipgloss.Center, lipgloss.Top, box))
 
 	b.WriteString("\n\n")
@@ -508,14 +625,18 @@ func (m Model) viewTrafficConfig() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		LabelStyle.Render("Base TPS (Transactions Per Second)"),
 		m.renderInput(3, m.focusIndex == 0),
-		DimStyle.Render("  The baseline traffic rate"),
+		DimStyle.Render("  Normal traffic rate. This is your baseline load."),
+		DimStyle.Render("  ex) 100 = 100 requests/sec (6,000 req/min)"),
+		DimStyle.Render("  ex) 500 = 500 requests/sec (30,000 req/min)"),
 		"",
 		LabelStyle.Render("Max TPS"),
 		m.renderInput(4, m.focusIndex == 1),
-		DimStyle.Render("  Maximum TPS cap during spikes"),
+		DimStyle.Render("  Upper limit during spike events."),
+		DimStyle.Render("  ex) Base=100, Max=1000 -> spikes can reach 10x"),
+		DimStyle.Render("  ex) Base=100, Max=300  -> spikes capped at 3x"),
 	)
 
-	box := BorderStyle.Width(60).Render(content)
+	box := BorderStyle.Width(65).Render(content)
 	b.WriteString(lipgloss.Place(m.width, m.height-15, lipgloss.Center, lipgloss.Top, box))
 
 	b.WriteString("\n\n")
@@ -535,23 +656,32 @@ func (m Model) viewPatternConfig() string {
 	content := lipgloss.JoinVertical(lipgloss.Left,
 		LabelStyle.Render("Poisson Lambda (spike frequency)"),
 		m.renderInput(5, m.focusIndex == 0),
-		DimStyle.Render("  Average spikes per second (e.g., 0.1)"),
+		DimStyle.Render("  How often spikes occur (events per second)."),
+		DimStyle.Render("  ex) 0.1  = spike every ~10 sec (rare)"),
+		DimStyle.Render("  ex) 0.5  = spike every ~2 sec (frequent)"),
+		DimStyle.Render("  ex) 0.02 = spike every ~50 sec (very rare)"),
 		"",
 		LabelStyle.Render("Spike Factor (TPS multiplier)"),
 		m.renderInput(6, m.focusIndex == 1),
-		DimStyle.Render("  How much TPS increases during spikes"),
+		DimStyle.Render("  TPS multiplier when spike occurs."),
+		DimStyle.Render("  ex) 2.0 = 2x during spike (100 -> 200 TPS)"),
+		DimStyle.Render("  ex) 5.0 = 5x during spike (100 -> 500 TPS)"),
 		"",
 		LabelStyle.Render("Noise Amplitude"),
 		m.renderInput(7, m.focusIndex == 2),
-		DimStyle.Render("  Random fluctuation range (0.15 = ±15%)"),
+		DimStyle.Render("  Random fluctuation around base TPS."),
+		DimStyle.Render("  ex) 0.1  = +/-10% (90~110 when base=100)"),
+		DimStyle.Render("  ex) 0.3  = +/-30% (70~130 when base=100)"),
 		"",
-		LabelStyle.Render("Schedule (optional: hour-range:multiplier)"),
+		LabelStyle.Render("Schedule (optional)"),
 		m.renderInput(8, m.focusIndex == 3),
-		DimStyle.Render("  e.g., 9-17:1.5, 0-5:0.3"),
+		DimStyle.Render("  Time-based TPS multiplier. Format: hour-hour:factor"),
+		DimStyle.Render("  ex) 9-18:1.5  = 1.5x during 9AM-6PM"),
+		DimStyle.Render("  ex) 0-6:0.3   = 0.3x during midnight-6AM"),
 	)
 
-	box := BorderStyle.Width(60).Render(content)
-	b.WriteString(lipgloss.Place(m.width, m.height-18, lipgloss.Center, lipgloss.Top, box))
+	box := BorderStyle.Width(65).Render(content)
+	b.WriteString(lipgloss.Place(m.width, m.height-22, lipgloss.Center, lipgloss.Top, box))
 
 	b.WriteString("\n\n")
 	b.WriteString(lipgloss.Place(m.width, 0, lipgloss.Center, lipgloss.Top,
@@ -964,10 +1094,10 @@ func (m Model) renderLatencyHistogram(dist []LatencyBucket) string {
 
 		bar := ""
 		for i := 0; i < barLen; i++ {
-			bar += "█"
+			bar += "="
 		}
 		for i := barLen; i < barWidth; i++ {
-			bar += "░"
+			bar += "-"
 		}
 
 		b.WriteString(fmt.Sprintf("  %9s %s %d\n",
@@ -1016,65 +1146,88 @@ func (m Model) renderStatusCodes(codes map[int]int64) string {
 	return b.String()
 }
 
-// renderTimeChart renders a time-series chart of TPS over time
+// renderTimeChart renders a time-series table with detailed stats
 func (m Model) renderTimeChart(slots []TimeSlot) string {
 	if len(slots) == 0 {
-		return DimStyle.Render("No time series data collected")
+		return DimStyle.Render("No time series data collected (test was too short)")
 	}
 
 	var b strings.Builder
-	b.WriteString(SubtitleStyle.Render("TPS Over Time"))
+	b.WriteString(SubtitleStyle.Render("Timeline Summary (5s intervals)"))
 	b.WriteString("\n\n")
 
-	// Find max TPS for scaling
-	maxTPS := 1.0
+	// Calculate stats
+	var totalReqs, totalErrs int64
+	var minTPS, maxTPS, sumTPS float64
+	minTPS = slots[0].TPS
+	maxTPS = slots[0].TPS
+
 	for _, slot := range slots {
+		totalReqs += slot.Requests
+		totalErrs += slot.Errors
+		sumTPS += slot.TPS
+		if slot.TPS < minTPS {
+			minTPS = slot.TPS
+		}
 		if slot.TPS > maxTPS {
 			maxTPS = slot.TPS
 		}
 	}
+	avgTPS := sumTPS / float64(len(slots))
 
-	// Render simple ASCII chart
-	chartHeight := 8
-	chartWidth := len(slots)
-	if chartWidth > 60 {
-		chartWidth = 60
-	}
-
-	// Build chart rows from top to bottom
-	for row := chartHeight; row > 0; row-- {
-		threshold := (float64(row) / float64(chartHeight)) * maxTPS
-		line := "  "
-
-		for i := 0; i < chartWidth && i < len(slots); i++ {
-			if slots[i].TPS >= threshold {
-				if slots[i].Errors > 0 {
-					line += ErrorStyle.Render("▓")
-				} else {
-					line += ProgressBarStyle.Render("█")
-				}
-			} else {
-				line += " "
-			}
-		}
-
-		// Y-axis label
-		if row == chartHeight {
-			b.WriteString(fmt.Sprintf("%5.0f %s\n", maxTPS, line))
-		} else if row == 1 {
-			b.WriteString(fmt.Sprintf("%5.0f %s\n", 0.0, line))
-		} else {
-			b.WriteString(fmt.Sprintf("      %s\n", line))
-		}
-	}
-
-	// X-axis
-	b.WriteString("      " + DimStyle.Render(strings.Repeat("─", chartWidth)))
+	// Summary stats
+	b.WriteString(fmt.Sprintf("  %s %.0f  %s %.0f  %s %.0f\n",
+		LabelStyle.Render("Min TPS:"), minTPS,
+		LabelStyle.Render("Avg TPS:"), avgTPS,
+		LabelStyle.Render("Max TPS:"), maxTPS))
 	b.WriteString("\n")
-	b.WriteString(fmt.Sprintf("      %s%s%s",
-		DimStyle.Render("start"),
-		strings.Repeat(" ", chartWidth-9),
-		DimStyle.Render("end")))
+
+	// Table header
+	b.WriteString(DimStyle.Render("  Time       TPS     Reqs    Errs   Latency\n"))
+	b.WriteString(DimStyle.Render("  " + strings.Repeat("-", 48) + "\n"))
+
+	// Show last 8 slots (most recent data)
+	startIdx := 0
+	if len(slots) > 8 {
+		startIdx = len(slots) - 8
+	}
+
+	for i, slot := range slots[startIdx:] {
+		timeStart := (startIdx + i) * 5
+		timeEnd := timeStart + 5
+
+		// Format time as MM:SS
+		timeStr := fmt.Sprintf("%02d:%02d-%02d:%02d",
+			timeStart/60, timeStart%60,
+			timeEnd/60, timeEnd%60)
+
+		// Spike indicator
+		spikeMarker := " "
+		if slot.TPS > avgTPS*1.5 {
+			spikeMarker = WarningStyle.Render("*")
+		}
+
+		// Error highlight
+		errStr := fmt.Sprintf("%d", slot.Errors)
+		if slot.Errors > 0 {
+			errStr = ErrorStyle.Render(errStr)
+		}
+
+		b.WriteString(fmt.Sprintf("  %s %s%6.0f  %6d  %6s  %6.1fms\n",
+			DimStyle.Render(timeStr),
+			spikeMarker,
+			slot.TPS,
+			slot.Requests,
+			errStr,
+			slot.AvgLatency))
+	}
+
+	if startIdx > 0 {
+		b.WriteString(DimStyle.Render(fmt.Sprintf("\n  ... and %d earlier intervals\n", startIdx)))
+	}
+
+	b.WriteString("\n")
+	b.WriteString(DimStyle.Render("  * = spike detected (>1.5x avg TPS)"))
 
 	return b.String()
 }

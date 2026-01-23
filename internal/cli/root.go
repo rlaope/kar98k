@@ -28,7 +28,7 @@ var rootCmd = &cobra.Command{
     ██║  ██╗██║  ██║██║  ██║ █████╔╝╚█████╔╝██║  ██╗
     ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═╝ ╚════╝  ╚════╝ ╚═╝  ╚═╝
 
-kar98k is a high-intensity irregular traffic simulation service.
+kar is a high-intensity irregular traffic simulation service.
 Generate realistic, unpredictable traffic patterns for load testing.
 
 Commands:
@@ -46,7 +46,7 @@ Commands:
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Show version information",
-	Long:  `Display detailed version information about kar98k.`,
+	Long:  `Display detailed version information about kar.`,
 	Run: func(cmd *cobra.Command, args []string) {
 		printVersion()
 	},
