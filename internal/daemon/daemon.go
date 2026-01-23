@@ -184,10 +184,15 @@ func (d *Daemon) Trigger() {
 	d.mu.Unlock()
 
 	d.log("Trigger pulled! Starting traffic generation...")
+	d.log("Target: %s (%s)", d.status.TargetURL, d.status.Protocol)
+	d.log("Base TPS: %.0f, Max TPS: %.0f", d.cfg.Controller.BaseTPS, d.cfg.Controller.MaxTPS)
 
 	d.pool.Start(d.ctx)
 	d.checker.Start(d.ctx)
 	d.ctrl.Start(d.ctx)
+
+	// Start event monitoring
+	go d.monitorEvents()
 }
 
 // Pause pauses traffic generation
@@ -317,6 +322,85 @@ func (d *Daemon) log(format string, args ...interface{}) {
 	msg := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
 	if d.logFile != nil {
 		d.logFile.WriteString(msg)
+		d.logFile.Sync() // Flush immediately for tail -f
+	}
+}
+
+// monitorEvents monitors and logs traffic events
+func (d *Daemon) monitorEvents() {
+	ticker := time.NewTicker(time.Second)
+	defer ticker.Stop()
+
+	var lastSpiking bool
+	var lastTPS float64
+	var lastErrorCount int64
+	var peakTPS float64
+	var totalRequests int64
+
+	d.log("EVENT: Traffic generation started")
+
+	for {
+		select {
+		case <-d.ctx.Done():
+			d.log("EVENT: Traffic generation stopped")
+			d.log("SUMMARY: Peak TPS=%.0f, Total Requests=%d", peakTPS, totalRequests)
+			return
+		case <-ticker.C:
+			if d.ctrl == nil {
+				continue
+			}
+
+			status := d.ctrl.GetStatus()
+			currentTPS := status.PatternStatus.CurrentTPS
+			isSpiking := status.PatternStatus.PoissonSpiking
+
+			// Track peak TPS
+			if currentTPS > peakTPS {
+				peakTPS = currentTPS
+				d.log("EVENT: New peak TPS=%.0f", peakTPS)
+			}
+
+			// Detect spike start
+			if isSpiking && !lastSpiking {
+				d.log("EVENT: SPIKE START - TPS jumping from %.0f to %.0f (%.1fx)",
+					lastTPS, currentTPS, currentTPS/lastTPS)
+			}
+
+			// Detect spike end
+			if !isSpiking && lastSpiking {
+				d.log("EVENT: SPIKE END - TPS returning to %.0f", currentTPS)
+			}
+
+			// Log significant TPS changes (>20%)
+			if lastTPS > 0 {
+				change := (currentTPS - lastTPS) / lastTPS
+				if change > 0.2 || change < -0.2 {
+					d.log("TPS: %.0f -> %.0f (%+.1f%%)", lastTPS, currentTPS, change*100)
+				}
+			}
+
+			// Detect error spike
+			currentErrors := d.status.ErrorCount
+			if currentErrors-lastErrorCount > 10 {
+				d.log("WARNING: Error spike detected - %d new errors in last second",
+					currentErrors-lastErrorCount)
+			}
+
+			// Periodic status (every 10 seconds)
+			if time.Now().Second()%10 == 0 {
+				d.log("STATUS: TPS=%.0f, Requests=%d, Errors=%d, Workers=%d, Queue=%d",
+					currentTPS,
+					totalRequests,
+					d.status.ErrorCount,
+					status.ActiveWorkers,
+					status.QueueSize)
+			}
+
+			lastSpiking = isSpiking
+			lastTPS = currentTPS
+			lastErrorCount = currentErrors
+			totalRequests++
+		}
 	}
 }
 
