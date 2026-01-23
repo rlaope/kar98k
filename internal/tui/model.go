@@ -2,6 +2,8 @@ package tui
 
 import (
 	"fmt"
+	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -9,6 +11,37 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 )
+
+// Log file path
+var logFile *os.File
+
+// InitLogger initializes the log file
+func InitLogger() error {
+	dir := filepath.Join(os.TempDir(), "kar98k")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		return err
+	}
+	var err error
+	logFile, err = os.OpenFile(filepath.Join(dir, "kar98k.log"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0644)
+	return err
+}
+
+// CloseLogger closes the log file
+func CloseLogger() {
+	if logFile != nil {
+		logFile.Close()
+	}
+}
+
+// Log writes a message to the log file
+func Log(format string, args ...interface{}) {
+	if logFile == nil {
+		return
+	}
+	msg := fmt.Sprintf("[%s] %s\n", time.Now().Format("2006-01-02 15:04:05"), fmt.Sprintf(format, args...))
+	logFile.WriteString(msg)
+	logFile.Sync()
+}
 
 // Screen represents different screens in the TUI
 type Screen int
@@ -104,6 +137,12 @@ type Model struct {
 	slotErrors    int64
 	slotLatencies []float64
 	statusCodes   map[int]int64
+
+	// For event logging
+	lastSpiking    bool
+	lastLoggedTPS  float64
+	lastErrorCount int64
+	loggedStart    bool
 
 	// Final report data
 	Report ReportData
@@ -362,6 +401,19 @@ func (m *Model) updateInputs(msg tea.Msg) tea.Cmd {
 func (m *Model) updateRunningStats() {
 	elapsed := time.Since(m.startTime).Seconds()
 
+	// Log start event once
+	if !m.loggedStart {
+		m.loggedStart = true
+		targetURL := m.TargetURL
+		if targetURL == "" {
+			targetURL = m.inputs[0].Placeholder
+		}
+		Log("EVENT: Traffic generation started")
+		Log("CONFIG: Target=%s Method=%s Protocol=%s", targetURL, m.TargetMethod, m.Protocol)
+		Log("CONFIG: BaseTPS=%s MaxTPS=%s Lambda=%s SpikeFactor=%s Noise=%s",
+			m.BaseTPS, m.MaxTPS, m.PoissonLambda, m.SpikeFactor, m.NoiseAmp)
+	}
+
 	// Base TPS with small noise (±15%)
 	baseTPS := 100.0
 	noiseAmp := 0.15
@@ -378,9 +430,41 @@ func (m *Model) updateRunningStats() {
 	m.ErrorCount = int64(elapsed * 0.5)
 	m.AvgLatency = 15 + float64(m.spinnerFrame%5)
 
-	// Track peak TPS
+	// Track peak TPS and log new peak
 	if m.CurrentTPS > m.peakTPS {
 		m.peakTPS = m.CurrentTPS
+		Log("EVENT: New peak TPS=%.0f", m.peakTPS)
+	}
+
+	// Log spike start/end
+	if m.IsSpiking && !m.lastSpiking {
+		Log("EVENT: SPIKE START - TPS=%.0f (%.1fx base)", m.CurrentTPS, m.CurrentTPS/baseTPS)
+	}
+	if !m.IsSpiking && m.lastSpiking {
+		Log("EVENT: SPIKE END - TPS returning to %.0f", m.CurrentTPS)
+	}
+	m.lastSpiking = m.IsSpiking
+
+	// Log significant TPS changes (>20%)
+	if m.lastLoggedTPS > 0 {
+		change := (m.CurrentTPS - m.lastLoggedTPS) / m.lastLoggedTPS
+		if change > 0.2 || change < -0.2 {
+			Log("TPS: %.0f -> %.0f (%+.0f%%)", m.lastLoggedTPS, m.CurrentTPS, change*100)
+		}
+	}
+	m.lastLoggedTPS = m.CurrentTPS
+
+	// Log error increases
+	newErrors := m.ErrorCount - m.lastErrorCount
+	if newErrors > 5 {
+		Log("WARNING: %d new errors (total: %d)", newErrors, m.ErrorCount)
+	}
+	m.lastErrorCount = m.ErrorCount
+
+	// Periodic status log (every 10 seconds)
+	if int(elapsed)%10 == 0 && int(elapsed) > 0 && m.spinnerFrame%10 == 0 {
+		Log("STATUS: TPS=%.0f Requests=%d Errors=%d Latency=%.1fms",
+			m.CurrentTPS, m.RequestsSent, m.ErrorCount, m.AvgLatency)
 	}
 
 	// Simulate latency collection (in real impl, this comes from actual requests)
