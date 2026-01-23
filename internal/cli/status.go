@@ -19,13 +19,13 @@ var (
 
 var statusCmd = &cobra.Command{
 	Use:   "status",
-	Short: "Show kar98k status",
-	Long: `Display the current status of the kar98k daemon.
+	Short: "Show kar status",
+	Long: `Display the current status of the kar daemon.
 
 Examples:
-  kar98k status          Show current status
-  kar98k status -w       Watch status (refresh every second)
-  kar98k status --json   Output as JSON`,
+  kar status          Show current status
+  kar status -w       Watch status (refresh every second)
+  kar status --json   Output as JSON`,
 	RunE: runStatus,
 }
 
@@ -47,9 +47,9 @@ func showStatus() error {
 	resp, err := daemon.SendCommand(daemon.Command{Type: "status"})
 	if err != nil {
 		fmt.Println()
-		fmt.Println(tui.ErrorStyle.Render("  ✗ kar98k is not running"))
+		fmt.Println(tui.ErrorStyle.Render("  ✗ kar is not running"))
 		fmt.Println()
-		fmt.Println(tui.DimStyle.Render("  Start with: kar98k start"))
+		fmt.Println(tui.DimStyle.Render("  Start with: kar start"))
 		fmt.Println()
 		return nil
 	}
