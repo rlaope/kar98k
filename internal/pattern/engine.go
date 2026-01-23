@@ -93,6 +93,7 @@ func (e *Engine) IsSpiking() bool {
 type Status struct {
 	BaseTPS           float64
 	MaxTPS            float64
+	CurrentTPS        float64
 	PoissonEnabled    bool
 	PoissonSpiking    bool
 	PoissonMultiplier float64
@@ -105,9 +106,16 @@ func (e *Engine) GetStatus() Status {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 
+	// Calculate current TPS (with schedule multiplier = 1.0)
+	currentTPS := e.baseTPS * e.poisson.Multiplier() * e.noise.Multiplier()
+	if currentTPS > e.maxTPS {
+		currentTPS = e.maxTPS
+	}
+
 	return Status{
 		BaseTPS:           e.baseTPS,
 		MaxTPS:            e.maxTPS,
+		CurrentTPS:        currentTPS,
 		PoissonEnabled:    e.poisson.cfg.Enabled,
 		PoissonSpiking:    e.poisson.IsSpiking(),
 		PoissonMultiplier: e.poisson.Multiplier(),
