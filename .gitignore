@@ -41,3 +41,6 @@ __debug_bin*
 ../*-설명.md
 *-설명.md
 khope/
+
+# Claude Code
+.claude/
