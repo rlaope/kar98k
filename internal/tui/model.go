@@ -20,7 +20,49 @@ const (
 	ScreenPatternConfig
 	ScreenReview
 	ScreenRunning
+	ScreenReport
 )
+
+// TimeSlot represents stats for a specific time period
+type TimeSlot struct {
+	Time       time.Time
+	TPS        float64
+	Requests   int64
+	Errors     int64
+	AvgLatency float64
+}
+
+// LatencyBucket represents a latency distribution bucket
+type LatencyBucket struct {
+	Label string
+	Count int64
+}
+
+// ReportData holds all data for the final report
+type ReportData struct {
+	// Overall stats
+	TotalRequests   int64
+	TotalErrors     int64
+	TotalDuration   time.Duration
+	AvgTPS          float64
+	PeakTPS         float64
+	MinLatency      float64
+	MaxLatency      float64
+	AvgLatency      float64
+	P50Latency      float64
+	P95Latency      float64
+	P99Latency      float64
+	SuccessRate     float64
+
+	// Time series data (for graph)
+	TimeSlots []TimeSlot
+
+	// Latency distribution
+	LatencyDist []LatencyBucket
+
+	// Status code distribution
+	StatusCodes map[int]int64
+}
 
 // Model is the main TUI model
 type Model struct {
@@ -47,11 +89,24 @@ type Model struct {
 	Schedule      string
 
 	// Runtime state
-	CurrentTPS  float64
+	CurrentTPS   float64
 	RequestsSent int64
 	ErrorCount   int64
 	AvgLatency   float64
 	IsSpiking    bool
+
+	// Stats collection for report
+	latencies     []float64
+	peakTPS       float64
+	timeSlots     []TimeSlot
+	lastSlotTime  time.Time
+	slotRequests  int64
+	slotErrors    int64
+	slotLatencies []float64
+	statusCodes   map[int]int64
+
+	// Final report data
+	Report ReportData
 }
 
 // NewModel creates a new TUI model
@@ -65,6 +120,10 @@ func NewModel() Model {
 		PoissonLambda: "0.1",
 		SpikeFactor:   "3.0",
 		NoiseAmp:      "0.15",
+		statusCodes:   make(map[int]int64),
+		latencies:     make([]float64, 0),
+		timeSlots:     make([]TimeSlot, 0),
+		slotLatencies: make([]float64, 0),
 	}
 
 	// Create text inputs
@@ -154,10 +213,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c", "q":
-			if m.screen == ScreenRunning && m.triggered {
-				m.triggered = false
+		case "ctrl+c":
+			return m, tea.Quit
+
+		case "q":
+			if m.screen == ScreenRunning {
+				m.generateReport()
+				m.screen = ScreenReport
 				return m, nil
+			}
+			if m.screen == ScreenReport {
+				return m, tea.Quit
 			}
 			return m, tea.Quit
 
@@ -300,6 +366,58 @@ func (m *Model) updateRunningStats() {
 	m.ErrorCount = int64(elapsed * 0.5)
 	m.AvgLatency = 15 + float64(m.spinnerFrame%5)
 	m.IsSpiking = m.spinnerFrame%20 < 5
+
+	// Track peak TPS
+	if m.CurrentTPS > m.peakTPS {
+		m.peakTPS = m.CurrentTPS
+	}
+
+	// Simulate latency collection (in real impl, this comes from actual requests)
+	simulatedLatency := m.AvgLatency + float64(m.spinnerFrame%10) - 5
+	m.latencies = append(m.latencies, simulatedLatency)
+	m.slotLatencies = append(m.slotLatencies, simulatedLatency)
+
+	// Simulate status codes
+	if m.spinnerFrame%20 == 0 {
+		m.statusCodes[500]++
+	} else if m.spinnerFrame%10 == 0 {
+		m.statusCodes[429]++
+	} else {
+		m.statusCodes[200]++
+	}
+
+	// Collect time slot data every 5 seconds
+	now := time.Now()
+	if m.lastSlotTime.IsZero() {
+		m.lastSlotTime = now
+	}
+
+	if now.Sub(m.lastSlotTime) >= 5*time.Second {
+		// Calculate slot stats
+		slotAvgLatency := 0.0
+		if len(m.slotLatencies) > 0 {
+			sum := 0.0
+			for _, l := range m.slotLatencies {
+				sum += l
+			}
+			slotAvgLatency = sum / float64(len(m.slotLatencies))
+		}
+
+		slot := TimeSlot{
+			Time:       now,
+			TPS:        m.CurrentTPS,
+			Requests:   m.RequestsSent - m.slotRequests,
+			Errors:     m.ErrorCount - m.slotErrors,
+			AvgLatency: slotAvgLatency,
+		}
+		m.timeSlots = append(m.timeSlots, slot)
+
+		// Reset slot counters
+		m.lastSlotTime = now
+		m.slotRequests = m.RequestsSent
+		m.slotErrors = m.ErrorCount
+		m.slotLatencies = make([]float64, 0)
+	}
 }
 
 // View renders the TUI
@@ -317,6 +435,8 @@ func (m Model) View() string {
 		return m.viewReview()
 	case ScreenRunning:
 		return m.viewRunning()
+	case ScreenReport:
+		return m.viewReport()
 	default:
 		return ""
 	}
@@ -627,4 +747,334 @@ func (m Model) GetConfig() map[string]string {
 		"noise_amp":      m.NoiseAmp,
 		"schedule":       m.Schedule,
 	}
+}
+
+// generateReport calculates final report statistics
+func (m *Model) generateReport() {
+	r := &m.Report
+
+	r.TotalRequests = m.RequestsSent
+	r.TotalErrors = m.ErrorCount
+	r.TotalDuration = time.Since(m.startTime)
+	r.PeakTPS = m.peakTPS
+	r.TimeSlots = m.timeSlots
+	r.StatusCodes = m.statusCodes
+
+	// Calculate average TPS
+	if r.TotalDuration.Seconds() > 0 {
+		r.AvgTPS = float64(r.TotalRequests) / r.TotalDuration.Seconds()
+	}
+
+	// Calculate success rate
+	if r.TotalRequests > 0 {
+		r.SuccessRate = float64(r.TotalRequests-r.TotalErrors) / float64(r.TotalRequests) * 100
+	}
+
+	// Calculate latency stats
+	if len(m.latencies) > 0 {
+		sorted := make([]float64, len(m.latencies))
+		copy(sorted, m.latencies)
+		sortFloat64s(sorted)
+
+		r.MinLatency = sorted[0]
+		r.MaxLatency = sorted[len(sorted)-1]
+
+		// Average
+		sum := 0.0
+		for _, l := range sorted {
+			sum += l
+		}
+		r.AvgLatency = sum / float64(len(sorted))
+
+		// Percentiles
+		r.P50Latency = percentile(sorted, 50)
+		r.P95Latency = percentile(sorted, 95)
+		r.P99Latency = percentile(sorted, 99)
+
+		// Latency distribution buckets
+		r.LatencyDist = calculateLatencyDist(sorted)
+	}
+}
+
+// sortFloat64s sorts a slice of float64 in ascending order
+func sortFloat64s(arr []float64) {
+	for i := 0; i < len(arr); i++ {
+		for j := i + 1; j < len(arr); j++ {
+			if arr[j] < arr[i] {
+				arr[i], arr[j] = arr[j], arr[i]
+			}
+		}
+	}
+}
+
+// percentile calculates the p-th percentile of sorted data
+func percentile(sorted []float64, p float64) float64 {
+	if len(sorted) == 0 {
+		return 0
+	}
+	index := int(float64(len(sorted)-1) * p / 100)
+	return sorted[index]
+}
+
+// calculateLatencyDist creates latency distribution buckets
+func calculateLatencyDist(sorted []float64) []LatencyBucket {
+	buckets := []LatencyBucket{
+		{Label: "<10ms", Count: 0},
+		{Label: "10-25ms", Count: 0},
+		{Label: "25-50ms", Count: 0},
+		{Label: "50-100ms", Count: 0},
+		{Label: "100-250ms", Count: 0},
+		{Label: ">250ms", Count: 0},
+	}
+
+	for _, l := range sorted {
+		switch {
+		case l < 10:
+			buckets[0].Count++
+		case l < 25:
+			buckets[1].Count++
+		case l < 50:
+			buckets[2].Count++
+		case l < 100:
+			buckets[3].Count++
+		case l < 250:
+			buckets[4].Count++
+		default:
+			buckets[5].Count++
+		}
+	}
+
+	return buckets
+}
+
+// viewReport renders the final report screen
+func (m Model) viewReport() string {
+	var b strings.Builder
+	r := m.Report
+
+	b.WriteString("\n")
+
+	// Header
+	header := lipgloss.JoinHorizontal(lipgloss.Center,
+		MiniLogo(),
+		"  ",
+		TitleStyle.Render(" TEST REPORT "),
+		"  ",
+		SuccessStyle.Render(CheckMark+" COMPLETED"),
+	)
+	b.WriteString(lipgloss.Place(m.width, 0, lipgloss.Center, lipgloss.Top, header))
+	b.WriteString("\n\n")
+
+	// Overview section
+	overview := lipgloss.JoinVertical(lipgloss.Left,
+		SubtitleStyle.Render("Overview"),
+		"",
+		fmt.Sprintf("  %s %s", LabelStyle.Render("Duration:"), ValueStyle.Render(r.TotalDuration.Round(time.Second).String())),
+		fmt.Sprintf("  %s %s", LabelStyle.Render("Total Requests:"), ValueStyle.Render(fmt.Sprintf("%d", r.TotalRequests))),
+		fmt.Sprintf("  %s %s", LabelStyle.Render("Success Rate:"), m.coloredSuccessRate(r.SuccessRate)),
+		fmt.Sprintf("  %s %s / %s", LabelStyle.Render("TPS (avg/peak):"), ValueStyle.Render(fmt.Sprintf("%.1f", r.AvgTPS)), HighlightStyle.Render(fmt.Sprintf("%.1f", r.PeakTPS))),
+	)
+
+	// Latency section
+	latency := lipgloss.JoinVertical(lipgloss.Left,
+		SubtitleStyle.Render("Latency Distribution"),
+		"",
+		fmt.Sprintf("  %s %s", LabelStyle.Render("Min:"), ValueStyle.Render(fmt.Sprintf("%.2fms", r.MinLatency))),
+		fmt.Sprintf("  %s %s", LabelStyle.Render("Avg:"), ValueStyle.Render(fmt.Sprintf("%.2fms", r.AvgLatency))),
+		fmt.Sprintf("  %s %s", LabelStyle.Render("Max:"), WarningStyle.Render(fmt.Sprintf("%.2fms", r.MaxLatency))),
+		"",
+		fmt.Sprintf("  %s %s", LabelStyle.Render("P50:"), ValueStyle.Render(fmt.Sprintf("%.2fms", r.P50Latency))),
+		fmt.Sprintf("  %s %s", LabelStyle.Render("P95:"), ValueStyle.Render(fmt.Sprintf("%.2fms", r.P95Latency))),
+		fmt.Sprintf("  %s %s", LabelStyle.Render("P99:"), WarningStyle.Render(fmt.Sprintf("%.2fms", r.P99Latency))),
+	)
+
+	// Latency histogram
+	histogram := m.renderLatencyHistogram(r.LatencyDist)
+
+	// Status codes section
+	statusSection := m.renderStatusCodes(r.StatusCodes)
+
+	// Time series mini-chart
+	timeChart := m.renderTimeChart(r.TimeSlots)
+
+	// Layout
+	leftCol := lipgloss.JoinVertical(lipgloss.Left, overview, "", Divider(30), "", latency)
+	rightCol := lipgloss.JoinVertical(lipgloss.Left, histogram, "", statusSection)
+
+	topSection := lipgloss.JoinHorizontal(lipgloss.Top,
+		BorderStyle.Width(35).Render(leftCol),
+		"  ",
+		BorderStyle.Width(35).Render(rightCol),
+	)
+
+	b.WriteString(lipgloss.Place(m.width, 0, lipgloss.Center, lipgloss.Top, topSection))
+	b.WriteString("\n\n")
+
+	// Time chart (full width)
+	if len(r.TimeSlots) > 0 {
+		chartBox := BorderStyle.Width(72).Render(timeChart)
+		b.WriteString(lipgloss.Place(m.width, 0, lipgloss.Center, lipgloss.Top, chartBox))
+		b.WriteString("\n\n")
+	}
+
+	// Help
+	b.WriteString(lipgloss.Place(m.width, 0, lipgloss.Center, lipgloss.Top,
+		HelpStyle.Render("Press Q to exit")))
+
+	return b.String()
+}
+
+// coloredSuccessRate returns success rate with appropriate color
+func (m Model) coloredSuccessRate(rate float64) string {
+	rateStr := fmt.Sprintf("%.2f%%", rate)
+	switch {
+	case rate >= 99:
+		return SuccessStyle.Render(rateStr)
+	case rate >= 95:
+		return WarningStyle.Render(rateStr)
+	default:
+		return ErrorStyle.Render(rateStr)
+	}
+}
+
+// renderLatencyHistogram renders a horizontal bar chart of latency distribution
+func (m Model) renderLatencyHistogram(dist []LatencyBucket) string {
+	if len(dist) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(SubtitleStyle.Render("Latency Histogram"))
+	b.WriteString("\n\n")
+
+	// Find max for scaling
+	maxCount := int64(1)
+	for _, bucket := range dist {
+		if bucket.Count > maxCount {
+			maxCount = bucket.Count
+		}
+	}
+
+	barWidth := 20
+	for _, bucket := range dist {
+		barLen := int(float64(bucket.Count) / float64(maxCount) * float64(barWidth))
+		if barLen == 0 && bucket.Count > 0 {
+			barLen = 1
+		}
+
+		bar := ""
+		for i := 0; i < barLen; i++ {
+			bar += "█"
+		}
+		for i := barLen; i < barWidth; i++ {
+			bar += "░"
+		}
+
+		b.WriteString(fmt.Sprintf("  %9s %s %d\n",
+			LabelStyle.Render(bucket.Label),
+			ProgressBarStyle.Render(bar[:barLen])+ProgressEmptyStyle.Render(bar[barLen:]),
+			bucket.Count))
+	}
+
+	return b.String()
+}
+
+// renderStatusCodes renders status code distribution
+func (m Model) renderStatusCodes(codes map[int]int64) string {
+	if len(codes) == 0 {
+		return ""
+	}
+
+	var b strings.Builder
+	b.WriteString(SubtitleStyle.Render("Status Codes"))
+	b.WriteString("\n\n")
+
+	// Common status codes to check
+	checkCodes := []int{200, 201, 204, 400, 401, 403, 404, 429, 500, 502, 503}
+
+	for _, code := range checkCodes {
+		count, exists := codes[code]
+		if !exists || count == 0 {
+			continue
+		}
+
+		var style lipgloss.Style
+		switch {
+		case code >= 200 && code < 300:
+			style = SuccessStyle
+		case code >= 400 && code < 500:
+			style = WarningStyle
+		default:
+			style = ErrorStyle
+		}
+
+		b.WriteString(fmt.Sprintf("  %s %s\n",
+			style.Render(fmt.Sprintf("%d:", code)),
+			ValueStyle.Render(fmt.Sprintf("%d", count))))
+	}
+
+	return b.String()
+}
+
+// renderTimeChart renders a time-series chart of TPS over time
+func (m Model) renderTimeChart(slots []TimeSlot) string {
+	if len(slots) == 0 {
+		return DimStyle.Render("No time series data collected")
+	}
+
+	var b strings.Builder
+	b.WriteString(SubtitleStyle.Render("TPS Over Time"))
+	b.WriteString("\n\n")
+
+	// Find max TPS for scaling
+	maxTPS := 1.0
+	for _, slot := range slots {
+		if slot.TPS > maxTPS {
+			maxTPS = slot.TPS
+		}
+	}
+
+	// Render simple ASCII chart
+	chartHeight := 8
+	chartWidth := len(slots)
+	if chartWidth > 60 {
+		chartWidth = 60
+	}
+
+	// Build chart rows from top to bottom
+	for row := chartHeight; row > 0; row-- {
+		threshold := (float64(row) / float64(chartHeight)) * maxTPS
+		line := "  "
+
+		for i := 0; i < chartWidth && i < len(slots); i++ {
+			if slots[i].TPS >= threshold {
+				if slots[i].Errors > 0 {
+					line += ErrorStyle.Render("▓")
+				} else {
+					line += ProgressBarStyle.Render("█")
+				}
+			} else {
+				line += " "
+			}
+		}
+
+		// Y-axis label
+		if row == chartHeight {
+			b.WriteString(fmt.Sprintf("%5.0f %s\n", maxTPS, line))
+		} else if row == 1 {
+			b.WriteString(fmt.Sprintf("%5.0f %s\n", 0.0, line))
+		} else {
+			b.WriteString(fmt.Sprintf("      %s\n", line))
+		}
+	}
+
+	// X-axis
+	b.WriteString("      " + DimStyle.Render(strings.Repeat("─", chartWidth)))
+	b.WriteString("\n")
+	b.WriteString(fmt.Sprintf("      %s%s%s",
+		DimStyle.Render("start"),
+		strings.Repeat(" ", chartWidth-9),
+		DimStyle.Render("end")))
+
+	return b.String()
 }
