@@ -4,7 +4,11 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"os/signal"
+	"path/filepath"
 	"strconv"
+	"strings"
+	"syscall"
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/kar98k/internal/config"
@@ -28,11 +32,22 @@ func init() {
 
 func runStart(cmd *cobra.Command, args []string) error {
 	// Check if already running
-	if daemon.IsRunning() {
-		fmt.Println("\n⚠️  kar is already running!")
-		fmt.Println("   Use 'kar status' to check status")
-		fmt.Println("   Use 'kar stop' to stop the running instance")
-		return nil
+	pidPath := filepath.Join(os.TempDir(), "kar98k", "kar98k.pid")
+	if pidData, err := os.ReadFile(pidPath); err == nil {
+		// PID file exists, check if process is actually running
+		if pid, err := strconv.Atoi(strings.TrimSpace(string(pidData))); err == nil {
+			if process, err := os.FindProcess(pid); err == nil {
+				// On Unix, FindProcess always succeeds, so we need to send signal 0 to check
+				if err := process.Signal(syscall.Signal(0)); err == nil {
+					fmt.Println("\n⚠️  kar is already running!")
+					fmt.Println("   Use 'kar status' to check status")
+					fmt.Println("   Use 'kar stop' to stop the running instance")
+					return nil
+				}
+			}
+		}
+		// Process not running, clean up stale PID file
+		os.Remove(pidPath)
 	}
 
 	// Initialize logger
@@ -41,9 +56,23 @@ func runStart(cmd *cobra.Command, args []string) error {
 	}
 	defer tui.CloseLogger()
 
+	// Create runtime directory and PID file
+	runtimeDir := filepath.Join(os.TempDir(), "kar98k")
+	os.MkdirAll(runtimeDir, 0755)
+	os.WriteFile(pidPath, []byte(fmt.Sprintf("%d", os.Getpid())), 0644)
+	defer os.Remove(pidPath)
+
 	// Run the TUI
 	m := tui.NewModel()
 	p := tea.NewProgram(m, tea.WithAltScreen())
+
+	// Handle SIGTERM to show report before exit
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigCh
+		p.Send(tui.StopMsg{})
+	}()
 
 	finalModel, err := p.Run()
 	if err != nil {

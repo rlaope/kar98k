@@ -1,10 +1,15 @@
 package cli
 
 import (
+	"bufio"
 	"fmt"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"syscall"
 	"time"
 
-	"github.com/kar98k/internal/daemon"
 	"github.com/kar98k/internal/tui"
 	"github.com/spf13/cobra"
 )
@@ -22,36 +27,98 @@ func init() {
 }
 
 func runStop(cmd *cobra.Command, args []string) error {
-	if !daemon.IsRunning() {
+	pidPath := filepath.Join(os.TempDir(), "kar98k", "kar98k.pid")
+	logPath := filepath.Join(os.TempDir(), "kar98k", "kar98k.log")
+
+	// Read PID file
+	pidData, err := os.ReadFile(pidPath)
+	if err != nil {
 		fmt.Println()
 		fmt.Println(tui.WarningStyle.Render("  kar is not running"))
 		fmt.Println()
 		return nil
 	}
 
-	fmt.Println()
-	fmt.Print(tui.InfoStyle.Render("  Stopping kar"))
-
-	resp, err := daemon.SendCommand(daemon.Command{Type: "stop"})
+	pid, err := strconv.Atoi(strings.TrimSpace(string(pidData)))
 	if err != nil {
-		// Connection closed means daemon stopped
 		fmt.Println()
-		fmt.Println(tui.SuccessStyle.Render("  " + tui.CheckMark + " kar stopped"))
+		fmt.Println(tui.ErrorStyle.Render("  Invalid PID file"))
 		fmt.Println()
 		return nil
 	}
 
-	if resp.Success {
-		// Wait a moment for daemon to fully stop
-		time.Sleep(500 * time.Millisecond)
+	// Check if process exists
+	process, err := os.FindProcess(pid)
+	if err != nil {
 		fmt.Println()
-		fmt.Println(tui.SuccessStyle.Render("  " + tui.CheckMark + " kar stopped"))
+		fmt.Println(tui.WarningStyle.Render("  kar is not running"))
 		fmt.Println()
-	} else {
-		fmt.Println()
-		fmt.Println(tui.ErrorStyle.Render("  " + resp.Message))
-		fmt.Println()
+		os.Remove(pidPath)
+		return nil
 	}
 
+	fmt.Println()
+	fmt.Println(tui.InfoStyle.Render("  Stopping kar (PID: " + strconv.Itoa(pid) + ")..."))
+
+	// Send SIGTERM
+	if err := process.Signal(syscall.SIGTERM); err != nil {
+		// Process already finished, clean up PID file
+		os.Remove(pidPath)
+		fmt.Println(tui.SuccessStyle.Render("  " + tui.CheckMark + " kar stopped (was already finished)"))
+		fmt.Println()
+		showLastSummary(logPath)
+		return nil
+	}
+
+	// Wait for process to exit (max 5 seconds)
+	for i := 0; i < 50; i++ {
+		time.Sleep(100 * time.Millisecond)
+		if _, err := os.Stat(pidPath); os.IsNotExist(err) {
+			break
+		}
+	}
+
+	fmt.Println(tui.SuccessStyle.Render("  " + tui.CheckMark + " kar stopped"))
+	fmt.Println()
+
+	// Show last summary from log
+	showLastSummary(logPath)
+
 	return nil
+}
+
+// showLastSummary reads the log file and displays the last SUMMARY line
+func showLastSummary(logPath string) {
+	file, err := os.Open(logPath)
+	if err != nil {
+		return
+	}
+	defer file.Close()
+
+	var lastSummary string
+	scanner := bufio.NewScanner(file)
+	for scanner.Scan() {
+		line := scanner.Text()
+		if strings.Contains(line, "SUMMARY:") {
+			lastSummary = line
+		}
+	}
+
+	if lastSummary != "" {
+		fmt.Println(tui.SubtitleStyle.Render("  Last Session Summary:"))
+		// Parse and format summary
+		if idx := strings.Index(lastSummary, "SUMMARY:"); idx != -1 {
+			summary := lastSummary[idx+9:]
+			parts := strings.Fields(summary)
+			for _, part := range parts {
+				kv := strings.Split(part, "=")
+				if len(kv) == 2 {
+					fmt.Printf("    %s: %s\n",
+						tui.LabelStyle.Render(kv[0]),
+						tui.ValueStyle.Render(kv[1]))
+				}
+			}
+		}
+		fmt.Println()
+	}
 }

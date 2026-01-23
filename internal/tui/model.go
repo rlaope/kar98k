@@ -241,6 +241,9 @@ func (m Model) Init() tea.Cmd {
 // tickMsg is sent every second
 type tickMsg time.Time
 
+// StopMsg is sent when kar stop is called
+type StopMsg struct{}
+
 func tickCmd() tea.Cmd {
 	return tea.Tick(time.Millisecond*100, func(t time.Time) tea.Msg {
 		return tickMsg(t)
@@ -252,18 +255,21 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.KeyMsg:
 		switch msg.String() {
-		case "ctrl+c":
-			return m, tea.Quit
-
-		case "q":
+		case "ctrl+c", "q":
+			// On Running screen, show report first
 			if m.screen == ScreenRunning {
+				Log("EVENT: Traffic generation stopped by user")
+				Log("SUMMARY: Duration=%s Requests=%d Errors=%d PeakTPS=%.0f",
+					time.Since(m.startTime).Round(time.Second), m.RequestsSent, m.ErrorCount, m.peakTPS)
 				m.generateReport()
 				m.screen = ScreenReport
 				return m, nil
 			}
+			// On Report screen, exit
 			if m.screen == ScreenReport {
 				return m, tea.Quit
 			}
+			// On other screens, just exit
 			return m, tea.Quit
 
 		case "enter":
@@ -294,6 +300,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.updateRunningStats()
 		}
 		return m, tickCmd()
+
+	case StopMsg:
+		// Handle kar stop command
+		if m.screen == ScreenRunning {
+			Log("EVENT: Traffic generation stopped by 'kar stop' command")
+			Log("SUMMARY: Duration=%s Requests=%d Errors=%d PeakTPS=%.0f",
+				time.Since(m.startTime).Round(time.Second), m.RequestsSent, m.ErrorCount, m.peakTPS)
+			m.generateReport()
+			m.screen = ScreenReport
+			return m, nil
+		}
+		return m, tea.Quit
 	}
 
 	// Handle text input
