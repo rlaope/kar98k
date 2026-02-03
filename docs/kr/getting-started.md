@@ -135,6 +135,43 @@ kar stop
 kar run --config kar.yaml
 ```
 
+### 적응형 부하 탐색 (Adaptive Load Discovery)
+
+시스템의 최대 지속 가능 TPS를 자동으로 탐색:
+
+```bash
+# 인터랙티브 모드
+kar discover
+
+# URL 직접 지정
+kar discover --url http://localhost:8080/health
+
+# Headless 모드 (커스텀 임계값 설정)
+kar discover --url http://localhost:8080/health --headless \
+  --latency-limit 200 \
+  --error-limit 3 \
+  --min-tps 50 \
+  --max-tps 1000
+```
+
+이진 검색을 사용하여 효율적으로 최적 TPS를 탐색합니다:
+1. 최소 TPS에서 시작하여 안정성 확인
+2. 이진 검색으로 한계점 탐색
+3. 최대 지속 가능 TPS와 권장 설정값 출력
+
+출력 예시:
+```
+✓ DISCOVERY COMPLETE
+
+Your system can handle:
+  Sustained TPS:  486
+  Breaking Point: 583 TPS
+
+Recommendation:
+  Set BaseTPS to 389 (80% of sustained)
+  Set MaxTPS to 778 (safe spike limit)
+```
+
 ### 데모 서버
 
 테스트용 데모 HTTP 서버가 포함되어 있습니다:
@@ -153,6 +190,7 @@ make run-server
 |--------|------|
 | `kar start` | 인터랙티브 TUI 실행 |
 | `kar run --config <file>` | 설정 파일로 headless 실행 |
+| `kar discover` | 최대 지속 가능 TPS 자동 탐색 |
 | `kar stop` | 실행 중인 kar 중지 |
 | `kar logs` | 최근 로그 보기 |
 | `kar logs -f` | 실시간 로그 보기 |
