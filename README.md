@@ -196,6 +196,7 @@ make run-server
 |---------|-------------|
 | `kar start` | Launch interactive TUI |
 | `kar run --config <file>` | Run headless with config file |
+| `kar discover` | Auto-discover maximum sustainable TPS |
 | `kar stop` | Stop running kar instance |
 | `kar logs` | View recent logs |
 | `kar logs -f` | Follow logs in real-time |
