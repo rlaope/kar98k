@@ -16,7 +16,6 @@ import (
 	"github.com/kar98k/internal/discovery"
 	"github.com/kar98k/internal/health"
 	"github.com/kar98k/internal/tui"
-	"github.com/kar98k/internal/worker"
 	"github.com/spf13/cobra"
 )
 
@@ -149,25 +148,15 @@ func executeDiscovery(cfg config.Discovery, headless bool) error {
 		fmt.Printf("   Range:  %.0f - %.0f TPS\n\n", cfg.MinTPS, cfg.MaxTPS)
 	}
 
-	// Create metrics and worker pool
+	// Create metrics
 	metrics := health.NewMetrics()
-	workerCfg := config.Worker{
-		PoolSize:        500,
-		QueueSize:       5000,
-		MaxIdleConns:    100,
-		IdleConnTimeout: 90 * time.Second,
-	}
-	pool := worker.NewPool(workerCfg, metrics)
 
-	// Start the pool
+	// Create context
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	pool.Start(ctx)
-	defer pool.Stop()
-
 	// Create and run discovery controller
-	controller := discovery.NewController(cfg, pool, metrics)
+	controller := discovery.NewController(cfg, metrics)
 
 	// Set up progress callback for headless mode
 	if headless {
