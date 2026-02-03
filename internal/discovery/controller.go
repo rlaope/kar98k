@@ -5,11 +5,12 @@ import (
 	"fmt"
 	"log"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/kar98k/internal/config"
 	"github.com/kar98k/internal/health"
-	"github.com/kar98k/internal/worker"
+	"github.com/kar98k/pkg/protocol"
 )
 
 // State represents the current state of the discovery process.
@@ -25,27 +26,31 @@ const (
 // Controller manages the adaptive load discovery process.
 type Controller struct {
 	cfg      config.Discovery
-	pool     *worker.Pool
 	metrics  *health.Metrics
 	analyzer *Analyzer
+	client   protocol.Client
 
-	mu       sync.RWMutex
-	state    State
-	result   *Result
-	cancel   context.CancelFunc
+	mu        sync.RWMutex
+	state     State
+	result    *Result
+	cancel    context.CancelFunc
 	startTime time.Time
 
 	// Current search state
-	currentTPS    float64
-	lowTPS        float64
-	highTPS       float64
-	lastStableTPS float64
-	breakingTPS   float64
+	currentTPS     float64
+	lowTPS         float64
+	highTPS        float64
+	lastStableTPS  float64
+	breakingTPS    float64
 	stepsCompleted int
 
+	// Request tracking
+	totalRequests int64
+	totalErrors   int64
+
 	// Progress tracking
-	progress     float64
-	statusMsg    string
+	progress  float64
+	statusMsg string
 
 	// Callbacks for TUI updates
 	onProgress func(progress float64, currentTPS float64, p95 float64, errRate float64, status string)
@@ -53,12 +58,29 @@ type Controller struct {
 }
 
 // NewController creates a new discovery controller.
-func NewController(cfg config.Discovery, pool *worker.Pool, metrics *health.Metrics) *Controller {
+func NewController(cfg config.Discovery, metrics *health.Metrics) *Controller {
+	// Create HTTP client
+	clientCfg := protocol.ClientConfig{
+		MaxIdleConns:    100,
+		IdleConnTimeout: 90 * time.Second,
+		TLSInsecure:     true,
+	}
+
+	var client protocol.Client
+	switch cfg.Protocol {
+	case config.ProtocolHTTP2:
+		client = protocol.NewHTTP2Client(clientCfg)
+	case config.ProtocolGRPC:
+		client = protocol.NewGRPCClient(clientCfg)
+	default:
+		client = protocol.NewHTTPClient(clientCfg)
+	}
+
 	return &Controller{
 		cfg:      cfg,
-		pool:     pool,
 		metrics:  metrics,
 		analyzer: NewAnalyzer(5 * time.Second), // 5 second sliding window
+		client:   client,
 		state:    StateIdle,
 		lowTPS:   cfg.MinTPS,
 		highTPS:  cfg.MaxTPS,
@@ -291,31 +313,29 @@ func (c *Controller) runStep(ctx context.Context) *StepResult {
 	// Reset analyzer for this step
 	c.analyzer.ResetWindow()
 
-	// Set the pool rate
-	c.pool.SetRate(tps)
-
-	// Create target for requests
-	target := config.Target{
-		Name:     "discovery",
-		URL:      c.cfg.TargetURL,
-		Protocol: c.cfg.Protocol,
-		Method:   c.cfg.Method,
-		Weight:   100,
-		Timeout:  5 * time.Second,
+	// Create request
+	req := &protocol.Request{
+		URL:     c.cfg.TargetURL,
+		Method:  c.cfg.Method,
+		Timeout: 5 * time.Second,
 	}
-
-	client := c.pool.GetClient(c.cfg.Protocol)
 
 	// Submit jobs for the step duration
 	stepCtx, cancel := context.WithTimeout(ctx, c.cfg.StepDuration)
 	defer cancel()
 
-	startRequests := c.analyzer.GetTotalRequests()
-	startErrors := c.analyzer.GetTotalErrors()
+	startRequests := atomic.LoadInt64(&c.totalRequests)
+	startErrors := atomic.LoadInt64(&c.totalErrors)
 
-	// Job submission goroutine
+	// Calculate interval between requests
+	interval := time.Second / time.Duration(tps)
+	if interval < time.Millisecond {
+		interval = time.Millisecond
+	}
+
+	// Request sender goroutine
 	go func() {
-		ticker := time.NewTicker(time.Second / time.Duration(tps))
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {
@@ -323,10 +343,7 @@ func (c *Controller) runStep(ctx context.Context) *StepResult {
 			case <-stepCtx.Done():
 				return
 			case <-ticker.C:
-				c.pool.Submit(worker.Job{
-					Target: target,
-					Client: client,
-				})
+				go c.sendRequest(stepCtx, req)
 			}
 		}
 	}()
@@ -341,18 +358,23 @@ func (c *Controller) runStep(ctx context.Context) *StepResult {
 			// Step complete, analyze results
 			snapshot := c.analyzer.TakeSnapshot()
 
-			endRequests := c.analyzer.GetTotalRequests()
-			endErrors := c.analyzer.GetTotalErrors()
+			endRequests := atomic.LoadInt64(&c.totalRequests)
+			endErrors := atomic.LoadInt64(&c.totalErrors)
 
 			stepRequests := endRequests - startRequests
 			stepErrors := endErrors - startErrors
 
-			stable := c.isStable(snapshot.P95Latency, snapshot.ErrorRate)
+			var errorRate float64
+			if stepRequests > 0 {
+				errorRate = float64(stepErrors) / float64(stepRequests) * 100
+			}
+
+			stable := c.isStable(snapshot.P95Latency, errorRate)
 
 			return &StepResult{
 				TPS:           tps,
 				P95Latency:    snapshot.P95Latency,
-				ErrorRate:     snapshot.ErrorRate,
+				ErrorRate:     errorRate,
 				Stable:        stable,
 				Duration:      c.cfg.StepDuration,
 				TotalRequests: stepRequests,
@@ -366,8 +388,31 @@ func (c *Controller) runStep(ctx context.Context) *StepResult {
 		case <-ticker.C:
 			// Update progress callback
 			snapshot := c.analyzer.TakeSnapshot()
-			c.notifyProgress(tps, snapshot.P95Latency, snapshot.ErrorRate)
+			endRequests := atomic.LoadInt64(&c.totalRequests)
+			endErrors := atomic.LoadInt64(&c.totalErrors)
+			stepRequests := endRequests - startRequests
+			stepErrors := endErrors - startErrors
+			var errorRate float64
+			if stepRequests > 0 {
+				errorRate = float64(stepErrors) / float64(stepRequests) * 100
+			}
+			c.notifyProgress(tps, snapshot.P95Latency, errorRate)
 		}
+	}
+}
+
+// sendRequest sends a single request and records metrics.
+func (c *Controller) sendRequest(ctx context.Context, req *protocol.Request) {
+	resp := c.client.Do(ctx, req)
+
+	// Record latency in milliseconds
+	latencyMs := resp.Duration.Seconds() * 1000
+	isError := resp.StatusCode >= 400 || resp.StatusCode == 0
+
+	c.analyzer.RecordLatency(latencyMs, isError)
+	atomic.AddInt64(&c.totalRequests, 1)
+	if isError {
+		atomic.AddInt64(&c.totalErrors, 1)
 	}
 }
 
