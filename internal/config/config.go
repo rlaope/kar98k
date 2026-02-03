@@ -119,16 +119,16 @@ func DefaultConfig() *Config {
 		Pattern: Pattern{
 			Poisson: Poisson{
 				Enabled:     true,
-				Lambda:      0.1,
-				SpikeFactor: 3.0,
-				MinInterval: 30 * time.Second,
-				MaxInterval: 5 * time.Minute,
+				Lambda:      0.0083,              // ~2분마다 스파이크 (1/120)
+				SpikeFactor: 2.0,                 // 2배 증가 (기존 3.0에서 하향)
+				MinInterval: 1 * time.Minute,    // 최소 1분 간격
+				MaxInterval: 10 * time.Minute,   // 최대 10분 간격
 				RampUp:      5 * time.Second,
 				RampDown:    10 * time.Second,
 			},
 			Noise: Noise{
 				Enabled:   true,
-				Amplitude: 0.15,
+				Amplitude: 0.10,                  // 10% 노이즈 (기존 15%에서 하향)
 			},
 		},
 		Worker: Worker{
