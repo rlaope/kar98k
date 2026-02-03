@@ -163,9 +163,9 @@ func NewModel() Model {
 		BaseTPS:       "100",
 		MaxTPS:        "1000",
 		PoissonLambda: "",
-		SpikeInterval: "10s",
-		SpikeFactor:   "3.0",
-		NoiseAmp:      "0.15",
+		SpikeInterval: "2m",
+		SpikeFactor:   "2.0",
+		NoiseAmp:      "0.10",
 		statusCodes:   make(map[int]int64),
 		latencies:     make([]float64, 0),
 		timeSlots:     make([]TimeSlot, 0),
@@ -212,22 +212,22 @@ func NewModel() Model {
 
 	// Spike Interval [5] - new intuitive field
 	m.inputs[5] = textinput.New()
-	m.inputs[5].Placeholder = "10s"
-	m.inputs[5].SetValue("10s")
+	m.inputs[5].Placeholder = "2m"
+	m.inputs[5].SetValue("2m")
 	m.inputs[5].CharLimit = 10
 	m.inputs[5].Width = 10
 
 	// Spike Factor [6]
 	m.inputs[6] = textinput.New()
-	m.inputs[6].Placeholder = "3.0"
-	m.inputs[6].SetValue("3.0")
+	m.inputs[6].Placeholder = "2.0"
+	m.inputs[6].SetValue("2.0")
 	m.inputs[6].CharLimit = 10
 	m.inputs[6].Width = 10
 
 	// Noise Amplitude [7]
 	m.inputs[7] = textinput.New()
-	m.inputs[7].Placeholder = "0.15"
-	m.inputs[7].SetValue("0.15")
+	m.inputs[7].Placeholder = "0.10"
+	m.inputs[7].SetValue("0.10")
 	m.inputs[7].CharLimit = 10
 	m.inputs[7].Width = 10
 
@@ -610,7 +610,7 @@ func (m Model) viewWelcome() string {
 	var b strings.Builder
 
 	b.WriteString("\n\n")
-	b.WriteString(Logo())
+	b.WriteString(LogoWithWidth(m.width))
 	b.WriteString("\n\n")
 	b.WriteString(Tagline())
 	b.WriteString("\n\n\n")

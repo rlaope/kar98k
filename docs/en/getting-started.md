@@ -135,6 +135,43 @@ Run with a config file for automation:
 kar run --config kar.yaml
 ```
 
+### Adaptive Load Discovery
+
+Automatically find the maximum sustainable TPS for your system:
+
+```bash
+# Interactive mode
+kar discover
+
+# With URL directly
+kar discover --url http://localhost:8080/health
+
+# Headless mode with custom thresholds
+kar discover --url http://localhost:8080/health --headless \
+  --latency-limit 200 \
+  --error-limit 3 \
+  --min-tps 50 \
+  --max-tps 1000
+```
+
+Discovery uses binary search to efficiently find the optimal TPS:
+1. Starts at minimum TPS and verifies stability
+2. Uses binary search to find the breaking point
+3. Reports maximum sustainable TPS with recommendations
+
+Output example:
+```
+✓ DISCOVERY COMPLETE
+
+Your system can handle:
+  Sustained TPS:  486
+  Breaking Point: 583 TPS
+
+Recommendation:
+  Set BaseTPS to 389 (80% of sustained)
+  Set MaxTPS to 778 (safe spike limit)
+```
+
 ### Demo Server
 
 A demo HTTP server is included for testing:
@@ -153,6 +190,7 @@ make run-server
 |---------|-------------|
 | `kar start` | Launch interactive TUI |
 | `kar run --config <file>` | Run headless with config file |
+| `kar discover` | Auto-discover maximum sustainable TPS |
 | `kar stop` | Stop running kar instance |
 | `kar logs` | View recent logs |
 | `kar logs -f` | Follow logs in real-time |
