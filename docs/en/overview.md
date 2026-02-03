@@ -36,6 +36,12 @@ Precise TPS control using `golang.org/x/time/rate` token bucket algorithm ensure
 - Configurable shutdown timeout
 - No dropped requests during shutdown
 
+### Adaptive Load Discovery
+Automatically find the maximum sustainable TPS for your system:
+- Binary search algorithm for efficient discovery
+- Configurable P95 latency and error rate thresholds
+- Generates recommended BaseTPS and MaxTPS settings
+
 ## Use Cases
 
 1. **Load Testing**: Validate system performance under realistic traffic patterns
