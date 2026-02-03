@@ -94,6 +94,19 @@ type Metrics struct {
 	Path    string `yaml:"path"`
 }
 
+// Discovery configures the adaptive load discovery feature.
+type Discovery struct {
+	TargetURL       string        `yaml:"target_url"`
+	Method          string        `yaml:"method"`
+	Protocol        Protocol      `yaml:"protocol"`
+	LatencyLimitMs  int64         `yaml:"latency_limit_ms"`  // P95 latency threshold (default: 500ms)
+	ErrorRateLimit  float64       `yaml:"error_rate_limit"`  // Error rate threshold (default: 5%)
+	MinTPS          float64       `yaml:"min_tps"`           // Starting TPS (default: 10)
+	MaxTPS          float64       `yaml:"max_tps"`           // Upper bound (default: 10000)
+	StepDuration    time.Duration `yaml:"step_duration"`     // Duration per TPS step (default: 10s)
+	ConvergenceRate float64       `yaml:"convergence_rate"`  // Binary search convergence (default: 0.05 = 5%)
+}
+
 // DefaultConfig returns a configuration with sensible defaults.
 func DefaultConfig() *Config {
 	return &Config{
@@ -134,5 +147,19 @@ func DefaultConfig() *Config {
 			Address: ":9090",
 			Path:    "/metrics",
 		},
+	}
+}
+
+// DefaultDiscovery returns a Discovery config with sensible defaults.
+func DefaultDiscovery() Discovery {
+	return Discovery{
+		Method:          "GET",
+		Protocol:        ProtocolHTTP,
+		LatencyLimitMs:  500,
+		ErrorRateLimit:  5.0,
+		MinTPS:          10,
+		MaxTPS:          10000,
+		StepDuration:    10 * time.Second,
+		ConvergenceRate: 0.05,
 	}
 }
