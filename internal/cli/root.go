@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/kar98k/internal/tui"
 	"github.com/spf13/cobra"
+	"golang.org/x/term"
 )
 
 var (
@@ -53,8 +54,14 @@ var versionCmd = &cobra.Command{
 }
 
 func printVersion() {
+	// Get terminal width
+	width := 80 // default
+	if w, _, err := term.GetSize(int(os.Stdout.Fd())); err == nil && w > 0 {
+		width = w
+	}
+
 	fmt.Println()
-	fmt.Println(tui.Logo())
+	fmt.Println(tui.LogoWithWidth(width))
 	fmt.Println()
 
 	titleStyle := lipgloss.NewStyle().
