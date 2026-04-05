@@ -112,9 +112,24 @@ func handleHealth(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&stats.TotalRequests, 1)
 	atomic.AddInt64(&stats.GetRequests, 1)
 
-	// Simulate occasional slow responses
+	// 10% chance of failure: 500 error + 1~3s delay
+	if rand.Float32() < 0.10 {
+		delay := time.Duration(1000+rand.Intn(2000)) * time.Millisecond
+		time.Sleep(delay)
+		atomic.AddInt64(&stats.Errors, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]interface{}{
+			"status": "error",
+			"error":  "internal server error",
+			"delay":  delay.String(),
+		})
+		return
+	}
+
+	// 5% chance of slow response (no error)
 	if rand.Float32() < 0.05 {
-		time.Sleep(time.Duration(rand.Intn(100)) * time.Millisecond)
+		time.Sleep(time.Duration(200+rand.Intn(500)) * time.Millisecond)
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -171,7 +186,35 @@ func handleUserByID(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+func maybeFail(w http.ResponseWriter) bool {
+	roll := rand.Float32()
+	// 10% → 500 with 1~3s delay
+	if roll < 0.10 {
+		delay := time.Duration(1000+rand.Intn(2000)) * time.Millisecond
+		time.Sleep(delay)
+		atomic.AddInt64(&stats.Errors, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusInternalServerError)
+		json.NewEncoder(w).Encode(map[string]string{"error": "internal server error"})
+		return true
+	}
+	// 5% → 400
+	if roll < 0.15 {
+		atomic.AddInt64(&stats.Errors, 1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusBadRequest)
+		json.NewEncoder(w).Encode(map[string]string{"error": "bad request"})
+		return true
+	}
+	// 3% → slow (no error)
+	if roll < 0.18 {
+		time.Sleep(time.Duration(200+rand.Intn(500)) * time.Millisecond)
+	}
+	return false
+}
+
 func listUsers(w http.ResponseWriter, r *http.Request) {
+	if maybeFail(w) { return }
 	store.mu.RLock()
 	defer store.mu.RUnlock()
 
@@ -284,6 +327,8 @@ func deleteUser(w http.ResponseWriter, r *http.Request, id int) {
 func handleEcho(w http.ResponseWriter, r *http.Request) {
 	atomic.AddInt64(&stats.TotalRequests, 1)
 	atomic.AddInt64(&stats.PostRequests, 1)
+
+	if maybeFail(w) { return }
 
 	w.Header().Set("Content-Type", "application/json")
 
