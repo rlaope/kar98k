@@ -58,7 +58,7 @@ func (s *VUScheduler) Run(ctx context.Context) error {
 	defer cancel()
 
 	// Setup phase
-	fmt.Println("\n  Running setup...")
+	fmt.Print("\n  Running setup...")
 	data, err := s.runner.Setup()
 	if err != nil {
 		return fmt.Errorf("setup failed: %w", err)
@@ -86,7 +86,7 @@ func (s *VUScheduler) Run(ctx context.Context) error {
 	}
 
 	// Teardown phase
-	fmt.Println("\n  Running teardown...")
+	fmt.Print("\n  Running teardown...")
 	if tdErr := s.runner.Teardown(s.setupData); tdErr != nil {
 		fmt.Printf("  Teardown error: %v\n", tdErr)
 	}
@@ -272,7 +272,7 @@ func PrintReport(runner Runner, elapsed time.Duration) {
 	m := runner.Metrics()
 	sc := runner.Scenario()
 
-	fmt.Println("\n")
+	fmt.Print("\n")
 	fmt.Println("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
 	fmt.Printf("  TEST REPORT: %s\n", sc.Name)
 	fmt.Println("  ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━")
