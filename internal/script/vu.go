@@ -10,6 +10,11 @@ import (
 	"time"
 )
 
+// DashboardPusher is an interface for pushing stats to a dashboard.
+type DashboardPusher interface {
+	Push(stats interface{})
+}
+
 // VUScheduler manages virtual user lifecycle and ramping.
 type VUScheduler struct {
 	runner     Runner
@@ -17,11 +22,17 @@ type VUScheduler struct {
 	vus        int
 	duration   time.Duration
 	setupData  interface{}
+	dashboard  DashboardPusher
 
 	// Runtime state
 	activeVUs  int64
 	iterations int64
 	startTime  time.Time
+}
+
+// SetDashboard attaches a dashboard for real-time stats.
+func (s *VUScheduler) SetDashboard(d DashboardPusher) {
+	s.dashboard = d
 }
 
 // NewVUScheduler creates a scheduler from a runner's scenario config.
@@ -240,11 +251,12 @@ func (s *VUScheduler) vuLoop(ctx context.Context, vuID int) {
 	}
 }
 
-// reportProgress prints progress every 2 seconds.
+// reportProgress prints progress every 2 seconds and pushes to dashboard.
 func (s *VUScheduler) reportProgress(ctx context.Context, totalDuration time.Duration) {
-	ticker := time.NewTicker(2 * time.Second)
+	ticker := time.NewTicker(1 * time.Second)
 	defer ticker.Stop()
 
+	printTicker := 0
 	for {
 		select {
 		case <-ctx.Done():
@@ -255,14 +267,77 @@ func (s *VUScheduler) reportProgress(ctx context.Context, totalDuration time.Dur
 			vus := atomic.LoadInt64(&s.activeVUs)
 			m := s.runner.Metrics()
 
-			pct := float64(elapsed) / float64(totalDuration) * 100
-			if pct > 100 {
-				pct = 100
+			totalReqs := atomic.LoadInt64(&m.TotalRequests)
+			totalErrs := atomic.LoadInt64(&m.TotalErrors)
+			rps := float64(0)
+			if elapsed.Seconds() > 0 {
+				rps = float64(totalReqs) / elapsed.Seconds()
 			}
 
-			fmt.Printf("\r  [%5.1f%%] VUs: %d | Iterations: %d | Requests: %d | Errors: %d | Elapsed: %s",
-				pct, vus, iters, atomic.LoadInt64(&m.TotalRequests), atomic.LoadInt64(&m.TotalErrors),
-				elapsed.Round(time.Second))
+			// Calculate latency stats
+			m.mu.Lock()
+			var avgLat, p95Lat, p99Lat float64
+			if len(m.Durations) > 0 {
+				sorted := make([]float64, len(m.Durations))
+				copy(sorted, m.Durations)
+				sort.Float64s(sorted)
+
+				sum := 0.0
+				for _, d := range sorted {
+					sum += d
+				}
+				avgLat = sum / float64(len(sorted))
+				p95Lat = percentile(sorted, 95)
+				p99Lat = percentile(sorted, 99)
+			}
+
+			var checkStats []map[string]interface{}
+			for _, c := range m.Checks {
+				total := c.Passed + c.Failed
+				rate := float64(0)
+				if total > 0 {
+					rate = float64(c.Passed) / float64(total) * 100
+				}
+				checkStats = append(checkStats, map[string]interface{}{
+					"name": c.Name, "rate": rate, "passed": c.Passed, "failed": c.Failed,
+				})
+			}
+
+			statusCodes := make(map[int]int64)
+			for k, v := range m.StatusCodes {
+				statusCodes[k] = v
+			}
+			m.mu.Unlock()
+
+			// Push to dashboard
+			if s.dashboard != nil {
+				s.dashboard.Push(map[string]interface{}{
+					"timestamp":    time.Now().Unix(),
+					"rps":          rps,
+					"total_reqs":   totalReqs,
+					"total_errors": totalErrs,
+					"avg_latency":  avgLat,
+					"p95_latency":  p95Lat,
+					"p99_latency":  p99Lat,
+					"active_vus":   vus,
+					"iterations":   iters,
+					"error_rate":   func() float64 { if totalReqs > 0 { return float64(totalErrs) / float64(totalReqs) * 100 }; return 0 }(),
+					"status_codes": statusCodes,
+					"checks":       checkStats,
+					"elapsed":      elapsed.Seconds(),
+				})
+			}
+
+			// Print to CLI every 2 seconds
+			printTicker++
+			if printTicker%2 == 0 {
+				pct := float64(elapsed) / float64(totalDuration) * 100
+				if pct > 100 {
+					pct = 100
+				}
+				fmt.Printf("\r  [%5.1f%%] VUs: %d | Iterations: %d | Requests: %d | Errors: %d | Elapsed: %s",
+					pct, vus, iters, totalReqs, totalErrs, elapsed.Round(time.Second))
+			}
 		}
 	}
 }
