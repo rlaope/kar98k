@@ -133,6 +133,116 @@ make run-server
 # Endpoints: /health, /api/users, /api/stats, /api/echo
 ```
 
+## Script Engine (Code-Based Load Testing)
+
+Write load tests in your preferred language — like k6, but polyglot with chaos patterns built-in.
+
+```bash
+kar script test.star                          # Starlark (Python-like)
+kar script test.js                            # JavaScript
+kar script test.py                            # Python
+kar script test.rb                            # Ruby
+kar script test.star --vus 50 --duration 5m   # Override VUs and duration
+kar script test.star --dashboard              # Enable real-time web dashboard
+```
+
+### Starlark (.star)
+
+```python
+scenario(
+    name = "api-load-test",
+    pattern = chaos(preset = "aggressive", spike_factor = 3.0),
+    vus = ramp([
+        stage("30s", 10),   # Ramp to 10 VUs over 30s
+        stage("2m", 50),    # Ramp to 50 VUs over 2m
+        stage("30s", 0),    # Ramp down
+    ]),
+    thresholds = {
+        "http_req_duration{p95}": "< 500ms",
+        "http_req_failed": "< 0.05",
+    },
+)
+
+def setup():
+    resp = http.post("http://api.example.com/auth", json={"user": "test"})
+    return {"token": resp.json()["token"]}
+
+def default(data):
+    headers = {"Authorization": "Bearer " + data["token"]}
+    resp = http.get("http://api.example.com/products", headers=headers)
+    check(resp, {
+        "status 200": lambda r: r.status == 200,
+        "has items":  lambda r: len(r.json()) > 0,
+    })
+    sleep(think_time("1s", "3s"))
+```
+
+### JavaScript (.js)
+
+```javascript
+scenario({
+    name: "api-load-test",
+    pattern: chaos({ preset: "moderate" }),
+    thresholds: {
+        "http_req_duration{p95}": "< 500ms",
+    },
+});
+
+function run(data) {
+    var resp = http.get("http://api.example.com/health");
+    check(resp, {
+        "status 200": function(r) { return r.status === 200; },
+    });
+}
+```
+
+### Python (.py)
+
+```python
+from kar98k import scenario, chaos, http, check, sleep, think_time
+
+scenario(name="api-load-test", pattern=chaos(preset="moderate"))
+
+def default(data):
+    resp = http.get("http://api.example.com/health")
+    check(resp, {
+        "status 200": lambda r: r.status == 200,
+        "has status":  lambda r: "status" in r.json(),
+    })
+    sleep(think_time("1s", "3s"))
+```
+
+### Ruby (.rb)
+
+```ruby
+require_relative "../sdk/ruby/kar98k"
+
+scenario name: "api-load-test", pattern: chaos(preset: "moderate")
+
+def default(data)
+  resp = Http.get("http://api.example.com/health")
+  check resp,
+    "status 200" => ->(r) { r.status == 200 }
+  sleep_dur think_time("1s", "3s")
+end
+```
+
+### Real-Time Dashboard
+
+Enable with `--dashboard`:
+
+```bash
+kar script test.star --vus 20 --duration 5m --dashboard
+# Dashboard: http://localhost:8888
+```
+
+Opens a web UI showing:
+- Live RPS and latency graphs
+- P95/P99 latency tracking
+- Error rate and status codes
+- Check pass/fail rates
+- VU count and iteration progress
+
 ## Commands
 
 | Command | Description |
