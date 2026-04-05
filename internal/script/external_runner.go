@@ -190,6 +190,9 @@ func (r *ExternalRunner) executeExternalHTTP(resp externalResponse) {
 	req, err := newHTTPRequest(resp.Method, resp.URL, resp.Headers, resp.Body)
 	if err != nil {
 		r.metrics.recordRequest(0, time.Since(start), err)
+		r.stdin.Encode(map[string]interface{}{
+			"status": 0, "body": "", "duration": 0, "error": err.Error(),
+		})
 		return
 	}
 
@@ -199,10 +202,23 @@ func (r *ExternalRunner) executeExternalHTTP(resp externalResponse) {
 
 	if err != nil {
 		r.metrics.recordRequest(0, duration, err)
+		r.stdin.Encode(map[string]interface{}{
+			"status": 0, "body": "", "duration": duration.Seconds(), "error": err.Error(),
+		})
 		return
 	}
 	defer httpResp.Body.Close()
+
+	body, _ := io.ReadAll(httpResp.Body)
 	r.metrics.recordRequest(httpResp.StatusCode, duration, nil)
+
+	// Send response back to script so it can inspect status, body, etc.
+	r.stdin.Encode(map[string]interface{}{
+		"status":   httpResp.StatusCode,
+		"body":     string(body),
+		"duration": duration.Seconds(),
+		"error":    "",
+	})
 }
 
 func (r *ExternalRunner) Scenario() *ScenarioConfig { return &r.scenario }
