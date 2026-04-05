@@ -1,0 +1,178 @@
+package dashboard
+
+import (
+	"encoding/json"
+	"fmt"
+	"log"
+	"net/http"
+	"sync"
+	"time"
+)
+
+// Stats holds real-time metrics sent to the dashboard.
+type Stats struct {
+	Timestamp   int64            `json:"timestamp"`
+	RPS         float64          `json:"rps"`
+	TotalReqs   int64            `json:"total_reqs"`
+	TotalErrors int64            `json:"total_errors"`
+	AvgLatency  float64          `json:"avg_latency"`
+	P95Latency  float64          `json:"p95_latency"`
+	P99Latency  float64          `json:"p99_latency"`
+	ActiveVUs   int64            `json:"active_vus"`
+	Iterations  int64            `json:"iterations"`
+	ErrorRate   float64          `json:"error_rate"`
+	StatusCodes map[int]int64    `json:"status_codes"`
+	Checks      []CheckStat      `json:"checks"`
+	Elapsed     float64          `json:"elapsed"`
+}
+
+// CheckStat is a single check result for the dashboard.
+type CheckStat struct {
+	Name   string  `json:"name"`
+	Rate   float64 `json:"rate"`
+	Passed int64   `json:"passed"`
+	Failed int64   `json:"failed"`
+}
+
+// Server is the real-time web dashboard server.
+type Server struct {
+	mu        sync.RWMutex
+	addr      string
+	clients   map[chan []byte]struct{}
+	latest    Stats
+	history   []Stats
+	startTime time.Time
+	scenario  string
+	preset    string
+}
+
+// New creates a new dashboard server.
+func New(addr string) *Server {
+	return &Server{
+		addr:      addr,
+		clients:   make(map[chan []byte]struct{}),
+		startTime: time.Now(),
+		history:   make([]Stats, 0, 1800), // 30 min at 1/s
+	}
+}
+
+// SetScenario sets the scenario metadata for display.
+func (s *Server) SetScenario(name, preset string) {
+	s.scenario = name
+	s.preset = preset
+}
+
+// Start begins serving the dashboard.
+func (s *Server) Start() error {
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", s.handleIndex)
+	mux.HandleFunc("/events", s.handleSSE)
+	mux.HandleFunc("/api/stats", s.handleStats)
+	mux.HandleFunc("/api/history", s.handleHistory)
+
+	server := &http.Server{
+		Addr:    s.addr,
+		Handler: mux,
+	}
+
+	go func() {
+		if err := server.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			log.Printf("[dashboard] error: %v", err)
+		}
+	}()
+
+	fmt.Printf("  Dashboard: http://localhost%s\n", s.addr)
+	return nil
+}
+
+// Push sends new stats to all connected dashboard clients.
+func (s *Server) Push(stats Stats) {
+	s.mu.Lock()
+	s.latest = stats
+	s.history = append(s.history, stats)
+	// Keep last 30 min
+	if len(s.history) > 1800 {
+		s.history = s.history[1:]
+	}
+	s.mu.Unlock()
+
+	data, err := json.Marshal(stats)
+	if err != nil {
+		return
+	}
+
+	s.mu.RLock()
+	for ch := range s.clients {
+		select {
+		case ch <- data:
+		default:
+			// Client too slow, skip
+		}
+	}
+	s.mu.RUnlock()
+}
+
+func (s *Server) handleSSE(w http.ResponseWriter, r *http.Request) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		http.Error(w, "SSE not supported", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+
+	ch := make(chan []byte, 32)
+	s.mu.Lock()
+	s.clients[ch] = struct{}{}
+	s.mu.Unlock()
+
+	defer func() {
+		s.mu.Lock()
+		delete(s.clients, ch)
+		s.mu.Unlock()
+	}()
+
+	// Send initial state
+	s.mu.RLock()
+	initial, _ := json.Marshal(map[string]interface{}{
+		"scenario": s.scenario,
+		"preset":   s.preset,
+	})
+	s.mu.RUnlock()
+	fmt.Fprintf(w, "event: init\ndata: %s\n\n", initial)
+	flusher.Flush()
+
+	for {
+		select {
+		case data := <-ch:
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		case <-r.Context().Done():
+			return
+		}
+	}
+}
+
+func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.latest)
+}
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(s.history)
+}
+
+func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Write([]byte(dashboardHTML))
+}

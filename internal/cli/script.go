@@ -2,6 +2,7 @@ package cli
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 	"os/signal"
@@ -10,15 +11,18 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/kar98k/internal/dashboard"
 	"github.com/kar98k/internal/script"
 	"github.com/kar98k/internal/tui"
 	"github.com/spf13/cobra"
 )
 
 var (
-	scriptVUs      int
-	scriptDuration string
-	scriptPreset   string
+	scriptVUs        int
+	scriptDuration   string
+	scriptPreset     string
+	scriptDashboard  bool
+	scriptDashPort   string
 )
 
 var scriptCmd = &cobra.Command{
@@ -45,6 +49,8 @@ func init() {
 	scriptCmd.Flags().IntVar(&scriptVUs, "vus", 0, "Override number of virtual users")
 	scriptCmd.Flags().StringVar(&scriptDuration, "duration", "", "Override test duration (e.g., 30s, 5m)")
 	scriptCmd.Flags().StringVar(&scriptPreset, "preset", "", "Override chaos preset (gentle, moderate, aggressive)")
+	scriptCmd.Flags().BoolVar(&scriptDashboard, "dashboard", false, "Enable real-time web dashboard")
+	scriptCmd.Flags().StringVar(&scriptDashPort, "dash-port", ":8888", "Dashboard listen address")
 	rootCmd.AddCommand(scriptCmd)
 }
 
@@ -103,6 +109,16 @@ func runScript(cmd *cobra.Command, args []string) error {
 	// Create VU scheduler
 	scheduler := script.NewVUScheduler(runner, scriptVUs, durationOverride)
 
+	// Start dashboard if enabled
+	if scriptDashboard {
+		dash := dashboard.New(scriptDashPort)
+		dash.SetScenario(sc.Name, sc.Chaos.Preset)
+		if err := dash.Start(); err != nil {
+			return fmt.Errorf("starting dashboard: %w", err)
+		}
+		scheduler.SetDashboard(&dashAdapter{dash: dash})
+	}
+
 	// Handle signals
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -147,4 +163,20 @@ func langName(lang script.Language, ext string) string {
 		}
 	}
 	return "Unknown"
+}
+
+// dashAdapter bridges dashboard.Server to script.DashboardPusher.
+type dashAdapter struct {
+	dash *dashboard.Server
+}
+
+func (a *dashAdapter) Push(stats interface{}) {
+	data, err := json.Marshal(stats)
+	if err != nil {
+		return
+	}
+	var s dashboard.Stats
+	if json.Unmarshal(data, &s) == nil {
+		a.dash.Push(s)
+	}
 }
