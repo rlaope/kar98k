@@ -49,15 +49,15 @@ controller:
 pattern:
   poisson:
     enabled: true
-    lambda: 0.1
-    spike_factor: 3.0
-    min_interval: 30s
-    max_interval: 5m
+    lambda: 0.005
+    spike_factor: 2.5
+    min_interval: 2m
+    max_interval: 10m
     ramp_up: 5s
     ramp_down: 10s
   noise:
     enabled: true
-    amplitude: 0.15
+    amplitude: 0.10
 
 worker:
   pool_size: 1000
@@ -123,10 +123,10 @@ metrics:
 | 필드 | 타입 | 필수 | 기본값 | 설명 |
 |------|------|------|--------|------|
 | `enabled` | bool | 아니오 | `true` | 포아송 스파이크 활성화 |
-| `lambda` | float | 아니오 | `0.1` | 초당 평균 스파이크 수 |
-| `spike_factor` | float | 아니오 | `3.0` | 스파이크 시 TPS 배율 |
-| `min_interval` | duration | 아니오 | `30s` | 스파이크 간 최소 시간 |
-| `max_interval` | duration | 아니오 | `5m` | 스파이크 간 최대 시간 |
+| `lambda` | float | 아니오 | `0.005` | 초당 평균 스파이크 수 |
+| `spike_factor` | float | 아니오 | `2.5` | 스파이크 시 TPS 배율 |
+| `min_interval` | duration | 아니오 | `2m` | 스파이크 간 최소 시간 |
+| `max_interval` | duration | 아니오 | `10m` | 스파이크 간 최대 시간 |
 | `ramp_up` | duration | 아니오 | `5s` | 피크 스파이크에 도달하는 시간 |
 | `ramp_down` | duration | 아니오 | `10s` | 기본 상태로 돌아오는 시간 |
 
@@ -137,7 +137,7 @@ metrics:
 | 필드 | 타입 | 필수 | 기본값 | 설명 |
 |------|------|------|--------|------|
 | `enabled` | bool | 아니오 | `true` | 노이즈 활성화 |
-| `amplitude` | float | 아니오 | `0.15` | 변동 범위 (0.15 = ±15%) |
+| `amplitude` | float | 아니오 | `0.10` | 변동 범위 (0.10 = ±10%) |
 
 ### worker
 

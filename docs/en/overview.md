@@ -66,5 +66,5 @@ Automatically find the maximum sustainable TPS for your system:
 
 ## Requirements
 
-- Go 1.22 or later
+- Go 1.25 or later
 - Docker (optional, for containerized deployment)

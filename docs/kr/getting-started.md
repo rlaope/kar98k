@@ -61,6 +61,16 @@ make build
 kar version
 ```
 
+## 빠른 시작 (가장 쉬운 방법)
+
+```bash
+kar quickstart http://localhost:8080/health
+```
+
+옵션:
+- `--tps 200` — 기본 TPS 설정 (기본값: 50)
+- `--preset gentle|moderate|aggressive` — 트래픽 프리셋 (기본값: moderate)
+
 ## 빠른 시작
 
 ### 인터랙티브 모드 (권장)
@@ -188,6 +198,7 @@ make run-server
 
 | 명령어 | 설명 |
 |--------|------|
+| `kar quickstart <url>` | 빠른 부하 테스트 (가장 쉬운 방법) |
 | `kar start` | 인터랙티브 TUI 실행 |
 | `kar run --config <file>` | 설정 파일로 headless 실행 |
 | `kar discover` | 최대 지속 가능 TPS 자동 탐색 |
@@ -217,7 +228,7 @@ controller:
 pattern:
   poisson:
     enabled: true
-    lambda: 0.1
+    lambda: 0.005  # ~3분마다 스파이크 1회
     spike_factor: 2.0
   noise:
     enabled: true
