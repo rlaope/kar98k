@@ -292,25 +292,17 @@ function upd(s){
   }
 }
 
+function setButtons(running){
+  document.getElementById('startBtn').style.display=running?'none':'inline-block';
+  document.getElementById('stopBtn').style.display=running?'inline-block':'none';
+}
 function triggerStart(){
-  fetch('/api/start',{method:'POST'}).then(()=>{
-    document.getElementById('startBtn').style.display='none';
-    document.getElementById('stopBtn').style.display='inline-block';
-  });
+  fetch('/api/start',{method:'POST'}).then(()=>setButtons(true));
 }
 function triggerStop(){
-  fetch('/api/stop',{method:'POST'}).then(()=>{
-    document.getElementById('stopBtn').style.display='none';
-  });
+  fetch('/api/stop',{method:'POST'}).then(()=>setButtons(false));
 }
-// Check initial state
-fetch('/api/state').then(r=>r.json()).then(d=>{
-  if(!d.running){
-    document.getElementById('startBtn').style.display='inline-block';
-  } else {
-    document.getElementById('stopBtn').style.display='inline-block';
-  }
-});
+fetch('/api/state').then(r=>r.json()).then(d=>setButtons(d.running));
 
 const es=new EventSource('/events');
 es.addEventListener('init',e=>{const d=JSON.parse(e.data);document.getElementById('scenario').textContent=d.scenario||'-';document.getElementById('preset').textContent=d.preset||'-';});

@@ -127,59 +127,89 @@ func runScript(cmd *cobra.Command, args []string) error {
 		scheduler.SetDashboard(&dashAdapter{dash: dash})
 	}
 
-	// Wait for dashboard trigger if --wait
-	if scriptWait && dash != nil {
-		fmt.Println("\n  Waiting for trigger from dashboard...")
-		fmt.Printf("  Open http://localhost%s and click Start\n", scriptDashPort)
+	// Signal handler
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-		select {
-		case action := <-triggerCh:
-			if action != "start" {
+	// Wait mode: loop between waiting for Start and running
+	if scriptWait && dash != nil {
+		for {
+			dash.SetRunning(false)
+			fmt.Println("\n  Waiting for trigger from dashboard...")
+			fmt.Printf("  Open http://localhost%s and click Start\n", scriptDashPort)
+
+			// Wait for Start or Ctrl+C
+			select {
+			case action := <-triggerCh:
+				if action != "start" {
+					continue
+				}
+			case <-sigCh:
+				fmt.Println("\n  Exiting.")
 				return nil
 			}
-			fmt.Println("  Triggered from dashboard!")
+
+			fmt.Println("  Triggered! Starting test...")
 			dash.SetRunning(true)
-		case <-func() chan os.Signal {
-			ch := make(chan os.Signal, 1)
-			signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
-			return ch
-		}():
-			fmt.Println("\n  Cancelled.")
-			return nil
+
+			// Re-create scheduler for fresh run
+			scheduler = script.NewVUScheduler(runner, scriptVUs, durationOverride)
+			scheduler.SetDashboard(&dashAdapter{dash: dash})
+
+			ctx, cancel := context.WithCancel(context.Background())
+
+			// Listen for Stop or Ctrl+C during run
+			go func() {
+				select {
+				case <-sigCh:
+					fmt.Println("\n\n  Stopping...")
+					cancel()
+				case action := <-triggerCh:
+					if action == "stop" {
+						fmt.Println("\n\n  Stopped from dashboard.")
+						cancel()
+					}
+				case <-ctx.Done():
+				}
+			}()
+
+			startTime := time.Now()
+			if err := scheduler.Run(ctx); err != nil {
+				fmt.Printf("\n  Error: %v\n", err)
+			}
+			cancel()
+			elapsed := time.Since(startTime)
+			dash.SetRunning(false)
+
+			script.PrintReport(runner, elapsed)
+			fmt.Println("  Ready for next run. Click Start in dashboard or Ctrl+C to exit.")
 		}
 	}
 
-	// Handle signals
+	// Non-wait mode: run immediately
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
-	sigCh := make(chan os.Signal, 1)
-	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		for {
-			select {
-			case <-sigCh:
-				fmt.Println("\n\n  Stopping...")
+		select {
+		case <-sigCh:
+			fmt.Println("\n\n  Stopping...")
+			cancel()
+		case action := <-triggerCh:
+			if action == "stop" {
+				fmt.Println("\n\n  Stopped from dashboard.")
 				cancel()
-				return
-			case action := <-triggerCh:
-				if action == "stop" {
-					fmt.Println("\n\n  Stopped from dashboard.")
-					cancel()
-					return
-				}
 			}
+		case <-ctx.Done():
 		}
 	}()
 
-	// Run
 	startTime := time.Now()
 	if err := scheduler.Run(ctx); err != nil {
 		fmt.Printf("\n  Error: %v\n", err)
 	}
 	elapsed := time.Since(startTime)
 
-	// Print report
 	script.PrintReport(runner, elapsed)
 
 	return nil
