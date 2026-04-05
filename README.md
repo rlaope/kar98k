@@ -229,6 +229,8 @@ end
 
 ### Real-Time Dashboard
 
+![kar98k Dashboard](./assets/dashboard.png)
+
 Enable with `--dashboard`:
 
 ```bash
