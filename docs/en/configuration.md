@@ -49,15 +49,15 @@ controller:
 pattern:
   poisson:
     enabled: true
-    lambda: 0.1
-    spike_factor: 3.0
-    min_interval: 30s
-    max_interval: 5m
+    lambda: 0.005
+    spike_factor: 2.5
+    min_interval: 2m
+    max_interval: 10m
     ramp_up: 5s
     ramp_down: 10s
   noise:
     enabled: true
-    amplitude: 0.15
+    amplitude: 0.10
 
 worker:
   pool_size: 1000
@@ -123,10 +123,10 @@ Poisson distribution for random traffic spikes.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `enabled` | bool | No | `true` | Enable Poisson spikes |
-| `lambda` | float | No | `0.1` | Average spikes per second |
-| `spike_factor` | float | No | `3.0` | TPS multiplier during spikes |
-| `min_interval` | duration | No | `30s` | Minimum time between spikes |
-| `max_interval` | duration | No | `5m` | Maximum time between spikes |
+| `lambda` | float | No | `0.005` | Average spikes per second |
+| `spike_factor` | float | No | `2.5` | TPS multiplier during spikes |
+| `min_interval` | duration | No | `2m` | Minimum time between spikes |
+| `max_interval` | duration | No | `10m` | Maximum time between spikes |
 | `ramp_up` | duration | No | `5s` | Time to reach peak spike |
 | `ramp_down` | duration | No | `10s` | Time to return to baseline |
 
@@ -137,7 +137,7 @@ Micro fluctuations for realistic traffic.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `enabled` | bool | No | `true` | Enable noise |
-| `amplitude` | float | No | `0.15` | Fluctuation range (0.15 = ±15%) |
+| `amplitude` | float | No | `0.10` | Fluctuation range (0.10 = ±10%) |
 
 ### worker
 

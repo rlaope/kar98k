@@ -61,7 +61,15 @@ make build
 kar version
 ```
 
-## Quick Start
+## Quick Start (Easiest Way)
+
+```bash
+kar quickstart http://localhost:8080/health
+```
+
+Options:
+- `--tps 200` — Set base TPS (default: 50)
+- `--preset gentle|moderate|aggressive` — Traffic preset (default: moderate)
 
 ### Interactive Mode (Recommended)
 
@@ -189,6 +197,7 @@ make run-server
 | Command | Description |
 |---------|-------------|
 | `kar start` | Launch interactive TUI |
+| `kar quickstart <url>` | Quick start with sensible defaults |
 | `kar run --config <file>` | Run headless with config file |
 | `kar discover` | Auto-discover maximum sustainable TPS |
 | `kar stop` | Stop running kar instance |
@@ -217,7 +226,7 @@ controller:
 pattern:
   poisson:
     enabled: true
-    lambda: 0.1
+    lambda: 0.005  # ~1 spike every 3 minutes
     spike_factor: 2.0
   noise:
     enabled: true
