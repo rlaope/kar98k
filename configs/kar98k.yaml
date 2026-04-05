@@ -47,15 +47,15 @@ controller:
 pattern:
   poisson:
     enabled: true
-    lambda: 0.1           # Average spikes per second
-    spike_factor: 3.0     # TPS multiplier during spikes
-    min_interval: 30s     # Minimum time between spikes
-    max_interval: 5m      # Maximum time between spikes
-    ramp_up: 5s           # Time to reach peak spike
-    ramp_down: 10s        # Time to return to baseline
+    lambda: 0.005          # ~1 spike every 3-4 minutes
+    spike_factor: 2.5      # TPS multiplier during spikes
+    min_interval: 2m       # Minimum time between spikes
+    max_interval: 10m      # Maximum time between spikes
+    ramp_up: 5s            # Time to reach peak spike
+    ramp_down: 10s         # Time to return to baseline
   noise:
     enabled: true
-    amplitude: 0.15       # +/- 15% random fluctuation
+    amplitude: 0.10        # +/- 10% random fluctuation
 
 worker:
   pool_size: 1000         # Maximum concurrent workers

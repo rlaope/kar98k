@@ -51,15 +51,15 @@ controller:
 pattern:
   poisson:
     enabled: true
-    lambda: 0.2           # More frequent spikes for demo
-    spike_factor: 2.5     # 2.5x spike
-    min_interval: 10s     # Spike every 10-60 seconds
-    max_interval: 60s
+    lambda: 0.017          # ~1 spike per minute (demo-friendly)
+    spike_factor: 2.0      # 2x spike
+    min_interval: 30s      # Minimum 30s between spikes
+    max_interval: 2m       # Maximum 2 minutes
     ramp_up: 3s
     ramp_down: 5s
   noise:
     enabled: true
-    amplitude: 0.2        # ±20% fluctuation
+    amplitude: 0.10        # ±10% fluctuation
 
 worker:
   pool_size: 500

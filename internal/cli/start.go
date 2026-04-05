@@ -178,8 +178,6 @@ func buildConfigFromTUI(tuiConfig map[string]string) *config.Config {
 		cfg.Pattern.Poisson.Lambda = 0 // Will be calculated from interval
 	} else if lambda > 0 {
 		cfg.Pattern.Poisson.Lambda = lambda
-	} else {
-		cfg.Pattern.Poisson.Lambda = 0.1 // default
 	}
 
 	cfg.Pattern.Poisson.SpikeFactor = spikeFactor
