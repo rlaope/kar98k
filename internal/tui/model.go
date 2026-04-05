@@ -163,7 +163,7 @@ func NewModel() Model {
 		BaseTPS:       "100",
 		MaxTPS:        "1000",
 		PoissonLambda: "",
-		SpikeInterval: "2m",
+		SpikeInterval: "5m",
 		SpikeFactor:   "2.0",
 		NoiseAmp:      "0.10",
 		statusCodes:   make(map[int]int64),
@@ -212,8 +212,8 @@ func NewModel() Model {
 
 	// Spike Interval [5] - new intuitive field
 	m.inputs[5] = textinput.New()
-	m.inputs[5].Placeholder = "2m"
-	m.inputs[5].SetValue("2m")
+	m.inputs[5].Placeholder = "5m"
+	m.inputs[5].SetValue("5m")
 	m.inputs[5].CharLimit = 10
 	m.inputs[5].Width = 10
 
@@ -624,6 +624,8 @@ func (m Model) viewWelcome() string {
 		"",
 		ActiveButtonStyle.Render(" "+Crosshair+" START CONFIGURATION "),
 		"",
+		DimStyle.Render("Quick start? Just run:"),
+		ValueStyle.Render("kar quickstart <url>"),
 		"",
 		HelpStyle.Render("Press ENTER to begin • Press Q to quit"),
 	)

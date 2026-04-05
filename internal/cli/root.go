@@ -32,6 +32,9 @@ var rootCmd = &cobra.Command{
 kar is a high-intensity irregular traffic simulation service.
 Generate realistic, unpredictable traffic patterns for load testing.
 
+Quick Start:
+  kar quickstart <url>   One command to start (easiest way!)
+
 Commands:
   kar start       Launch interactive configuration
   kar run         Run with config file (headless)
