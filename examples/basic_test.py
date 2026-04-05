@@ -1,64 +1,42 @@
 #!/usr/bin/env python3
-"""basic_test.py - kar98k external process protocol example (Python)"""
+"""k6-style load test written in Python."""
 
-import sys
-import json
+import sys, os
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "sdk", "python"))
 
+from kar98k import scenario, chaos, http, check, sleep, think_time
 
-def send(msg):
-    print(json.dumps(msg), flush=True)
+# Configure scenario
+scenario(
+    name="python-api-test",
+    pattern=chaos(preset="moderate", spike_factor=2.5),
+    thresholds={
+        "http_req_duration{p95}": "< 500ms",
+        "http_req_failed": "< 0.05",
+    },
+)
 
+# Setup — runs once
+def setup():
+    return {"session": "py-session-abc"}
 
-def recv():
-    line = sys.stdin.readline()
-    if not line:
-        sys.exit(0)
-    return json.loads(line.strip())
+# Main iteration — runs per VU
+def default(data):
+    # GET health
+    resp = http.get("http://localhost:8080/health")
+    check(resp, {
+        "health status 200": lambda r: r.status == 200,
+        "has status field": lambda r: "status" in r.json(),
+    })
 
+    sleep(think_time("100ms", "500ms"))
 
-def main():
-    while True:
-        cmd = recv()
+    # GET users
+    resp = http.get("http://localhost:8080/api/users")
+    check(resp, {
+        "users status 200": lambda r: r.status == 200,
+    })
 
-        if cmd["cmd"] == "init":
-            send({
-                "type": "scenario",
-                "name": "python-health-check",
-                "chaos": {
-                    "preset": "moderate",
-                    "spike_factor": 2.0,
-                    "noise_amplitude": 0.10,
-                    "lambda": 0.005,
-                },
-            })
-            send({"type": "done"})
-
-        elif cmd["cmd"] == "setup":
-            send({"type": "done", "data": {"token": "py-session-123"}})
-
-        elif cmd["cmd"] == "iterate":
-            # Step 1: Health check
-            send({
-                "type": "http",
-                "method": "GET",
-                "url": "http://localhost:8080/health",
-            })
-
-            # Step 2: Check
-            send({
-                "type": "check",
-                "name": "health ok",
-                "passed": True,
-            })
-
-            send({"type": "done"})
-
-        elif cmd["cmd"] == "teardown":
-            send({"type": "done"})
-
-        else:
-            send({"type": "error", "message": f"unknown cmd: {cmd['cmd']}"})
-
-
-if __name__ == "__main__":
-    main()
+# Teardown — runs once at end
+def teardown(data):
+    pass
