@@ -34,6 +34,9 @@ type CheckStat struct {
 	Failed int64   `json:"failed"`
 }
 
+// TriggerCallback is called when the dashboard triggers a test start/stop.
+type TriggerCallback func(action string)
+
 // Server is the real-time web dashboard server.
 type Server struct {
 	mu        sync.RWMutex
@@ -44,6 +47,8 @@ type Server struct {
 	startTime time.Time
 	scenario  string
 	preset    string
+	running   bool
+	onTrigger TriggerCallback
 }
 
 // New creates a new dashboard server.
@@ -62,6 +67,18 @@ func (s *Server) SetScenario(name, preset string) {
 	s.preset = preset
 }
 
+// SetTriggerCallback sets the callback for start/stop from dashboard.
+func (s *Server) SetTriggerCallback(cb TriggerCallback) {
+	s.onTrigger = cb
+}
+
+// SetRunning updates the running state.
+func (s *Server) SetRunning(running bool) {
+	s.mu.Lock()
+	s.running = running
+	s.mu.Unlock()
+}
+
 // Start begins serving the dashboard.
 func (s *Server) Start() error {
 	mux := http.NewServeMux()
@@ -69,6 +86,9 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/events", s.handleSSE)
 	mux.HandleFunc("/api/stats", s.handleStats)
 	mux.HandleFunc("/api/history", s.handleHistory)
+	mux.HandleFunc("/api/start", s.handleStart)
+	mux.HandleFunc("/api/stop", s.handleStop)
+	mux.HandleFunc("/api/state", s.handleState)
 
 	server := &http.Server{
 		Addr:    s.addr,
@@ -175,4 +195,52 @@ func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleIndex(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
 	w.Write([]byte(dashboardHTML))
+}
+
+func (s *Server) handleStart(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.Lock()
+	s.running = true
+	s.startTime = time.Now()
+	s.history = s.history[:0]
+	s.mu.Unlock()
+
+	if s.onTrigger != nil {
+		s.onTrigger("start")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"started"}`))
+}
+
+func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
+	if r.Method != "POST" {
+		http.Error(w, "POST only", http.StatusMethodNotAllowed)
+		return
+	}
+	s.mu.Lock()
+	s.running = false
+	s.mu.Unlock()
+
+	if s.onTrigger != nil {
+		s.onTrigger("stop")
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	w.Write([]byte(`{"status":"stopped"}`))
+}
+
+func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(map[string]interface{}{
+		"running":  s.running,
+		"scenario": s.scenario,
+		"preset":   s.preset,
+	})
 }
