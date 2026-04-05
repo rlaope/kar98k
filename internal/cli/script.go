@@ -23,6 +23,7 @@ var (
 	scriptPreset     string
 	scriptDashboard  bool
 	scriptDashPort   string
+	scriptWait       bool
 )
 
 var scriptCmd = &cobra.Command{
@@ -51,6 +52,7 @@ func init() {
 	scriptCmd.Flags().StringVar(&scriptPreset, "preset", "", "Override chaos preset (gentle, moderate, aggressive)")
 	scriptCmd.Flags().BoolVar(&scriptDashboard, "dashboard", false, "Enable real-time web dashboard")
 	scriptCmd.Flags().StringVar(&scriptDashPort, "dash-port", ":8888", "Dashboard listen address")
+	scriptCmd.Flags().BoolVar(&scriptWait, "wait", false, "Wait for trigger from dashboard before starting")
 	rootCmd.AddCommand(scriptCmd)
 }
 
@@ -110,13 +112,41 @@ func runScript(cmd *cobra.Command, args []string) error {
 	scheduler := script.NewVUScheduler(runner, scriptVUs, durationOverride)
 
 	// Start dashboard if enabled
+	var dash *dashboard.Server
+	triggerCh := make(chan string, 1)
+
 	if scriptDashboard {
-		dash := dashboard.New(scriptDashPort)
+		dash = dashboard.New(scriptDashPort)
 		dash.SetScenario(sc.Name, sc.Chaos.Preset)
+		dash.SetTriggerCallback(func(action string) {
+			triggerCh <- action
+		})
 		if err := dash.Start(); err != nil {
 			return fmt.Errorf("starting dashboard: %w", err)
 		}
 		scheduler.SetDashboard(&dashAdapter{dash: dash})
+	}
+
+	// Wait for dashboard trigger if --wait
+	if scriptWait && dash != nil {
+		fmt.Println("\n  Waiting for trigger from dashboard...")
+		fmt.Printf("  Open http://localhost%s and click Start\n", scriptDashPort)
+
+		select {
+		case action := <-triggerCh:
+			if action != "start" {
+				return nil
+			}
+			fmt.Println("  Triggered from dashboard!")
+			dash.SetRunning(true)
+		case <-func() chan os.Signal {
+			ch := make(chan os.Signal, 1)
+			signal.Notify(ch, syscall.SIGINT, syscall.SIGTERM)
+			return ch
+		}():
+			fmt.Println("\n  Cancelled.")
+			return nil
+		}
 	}
 
 	// Handle signals
@@ -126,9 +156,20 @@ func runScript(cmd *cobra.Command, args []string) error {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
-		<-sigCh
-		fmt.Println("\n\n  Stopping...")
-		cancel()
+		for {
+			select {
+			case <-sigCh:
+				fmt.Println("\n\n  Stopping...")
+				cancel()
+				return
+			case action := <-triggerCh:
+				if action == "stop" {
+					fmt.Println("\n\n  Stopped from dashboard.")
+					cancel()
+					return
+				}
+			}
+		}
 	}()
 
 	// Run
