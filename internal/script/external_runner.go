@@ -4,10 +4,12 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -31,6 +33,7 @@ type ExternalRunner struct {
 	interpreter string
 	scenario   ScenarioConfig
 	metrics    *Metrics
+	mu         sync.Mutex
 	cmd        *exec.Cmd
 	stdin      *json.Encoder
 	stdout     *bufio.Scanner
@@ -109,6 +112,17 @@ func (r *ExternalRunner) Load(path string) error {
 			r.scenario.Name = resp.Name
 			if resp.Chaos != nil {
 				r.scenario.Chaos = *resp.Chaos
+				if resp.Chaos.Preset != "" {
+					if base, ok := chaosPresets[resp.Chaos.Preset]; ok {
+						r.scenario.Chaos = base
+						if resp.Chaos.SpikeFactor > 0 {
+							r.scenario.Chaos.SpikeFactor = resp.Chaos.SpikeFactor
+						}
+						if resp.Chaos.NoiseAmplitude > 0 {
+							r.scenario.Chaos.NoiseAmplitude = resp.Chaos.NoiseAmplitude
+						}
+					}
+				}
 			}
 			r.scenario.Stages = resp.Stages
 		case "done":
@@ -129,6 +143,9 @@ func (r *ExternalRunner) Setup() (interface{}, error) {
 }
 
 func (r *ExternalRunner) Iterate(vuID int, data interface{}) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+
 	if err := r.stdin.Encode(externalCmd{Cmd: "iterate", VuID: vuID, Data: data}); err != nil {
 		return err
 	}
@@ -207,7 +224,7 @@ func supportedExts() []string {
 }
 
 func newHTTPRequest(method, url string, headers map[string]string, body string) (*http.Request, error) {
-	var bodyReader *strings.Reader
+	var bodyReader io.Reader
 	if body != "" {
 		bodyReader = strings.NewReader(body)
 	}
