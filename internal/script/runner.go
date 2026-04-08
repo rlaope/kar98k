@@ -65,7 +65,7 @@ func NewRunner(path string) (Runner, error) {
 	case LangJS:
 		return NewJSRunner(), nil
 	case LangExternal:
-		return NewExternalRunner(path)
+		return NewExternalRunner(path, 8)
 	default:
 		return nil, fmt.Errorf("unsupported script language for %q", path)
 	}

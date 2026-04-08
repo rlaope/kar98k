@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"sync"
 	"time"
 )
 
@@ -28,15 +27,21 @@ import (
 //     {"type":"log","message":"..."}
 //     {"type":"done","data":{...}}
 //     {"type":"error","message":"..."}
+
+type externalWorker struct {
+	stdin  *json.Encoder
+	stdout *bufio.Scanner
+	cmd    *exec.Cmd
+}
+
 type ExternalRunner struct {
-	path       string
+	path        string
 	interpreter string
-	scenario   ScenarioConfig
-	metrics    *Metrics
-	mu         sync.Mutex
-	cmd        *exec.Cmd
-	stdin      *json.Encoder
-	stdout     *bufio.Scanner
+	scenario    ScenarioConfig
+	metrics     *Metrics
+	workers     []*externalWorker
+	workerPool  chan *externalWorker
+	poolSize    int
 }
 
 type externalCmd struct {
@@ -59,51 +64,69 @@ type externalResponse struct {
 	Stages  []Stage                `json:"stages,omitempty"`
 }
 
-func NewExternalRunner(path string) (*ExternalRunner, error) {
+func NewExternalRunner(path string, poolSize int) (*ExternalRunner, error) {
 	ext := strings.ToLower(filepath.Ext(path))
 	interpreter, ok := ExternalInterpreter[ext]
 	if !ok {
 		return nil, fmt.Errorf("no interpreter configured for %q extension. Supported: %v", ext, supportedExts())
 	}
 
+	if poolSize <= 0 {
+		poolSize = 8
+	}
+
 	return &ExternalRunner{
-		path:       path,
+		path:        path,
 		interpreter: interpreter,
-		scenario:   ScenarioConfig{Chaos: chaosPresets["moderate"]},
-		metrics:    newMetrics(),
+		scenario:    ScenarioConfig{Chaos: chaosPresets["moderate"]},
+		metrics:     newMetrics(),
+		poolSize:    poolSize,
+	}, nil
+}
+
+func (r *ExternalRunner) spawnWorker() (*externalWorker, error) {
+	parts := strings.Fields(r.interpreter)
+	args := append(parts[1:], r.path)
+	cmd := exec.Command(parts[0], args...)
+
+	stdinPipe, err := cmd.StdinPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating stdin pipe: %w", err)
+	}
+
+	stdoutPipe, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("creating stdout pipe: %w", err)
+	}
+
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("starting %s: %w", r.interpreter, err)
+	}
+
+	return &externalWorker{
+		stdin:  json.NewEncoder(stdinPipe),
+		stdout: bufio.NewScanner(stdoutPipe),
+		cmd:    cmd,
 	}, nil
 }
 
 func (r *ExternalRunner) Load(path string) error {
-	parts := strings.Fields(r.interpreter)
-	args := append(parts[1:], path)
-	r.cmd = exec.Command(parts[0], args...)
-
-	stdin, err := r.cmd.StdinPipe()
+	// Spawn one initial subprocess for init to get scenario config.
+	initWorker, err := r.spawnWorker()
 	if err != nil {
-		return fmt.Errorf("creating stdin pipe: %w", err)
-	}
-	r.stdin = json.NewEncoder(stdin)
-
-	stdout, err := r.cmd.StdoutPipe()
-	if err != nil {
-		return fmt.Errorf("creating stdout pipe: %w", err)
-	}
-	r.stdout = bufio.NewScanner(stdout)
-
-	if err := r.cmd.Start(); err != nil {
-		return fmt.Errorf("starting %s: %w", r.interpreter, err)
+		return err
 	}
 
-	// Send init command and read scenario config
-	if err := r.stdin.Encode(externalCmd{Cmd: "init"}); err != nil {
+	// Send init command and read scenario config.
+	if err := initWorker.stdin.Encode(externalCmd{Cmd: "init"}); err != nil {
+		initWorker.cmd.Process.Kill()
 		return fmt.Errorf("sending init: %w", err)
 	}
 
-	// Read responses until we get a "done" for init
-	for r.stdout.Scan() {
+	// Read responses until we get a "done" for init.
+	for initWorker.stdout.Scan() {
 		var resp externalResponse
-		if err := json.Unmarshal(r.stdout.Bytes(), &resp); err != nil {
+		if err := json.Unmarshal(initWorker.stdout.Bytes(), &resp); err != nil {
 			continue
 		}
 
@@ -126,51 +149,81 @@ func (r *ExternalRunner) Load(path string) error {
 			}
 			r.scenario.Stages = resp.Stages
 		case "done":
-			return nil
+			// Init done; kill the init subprocess and build the pool.
+			initWorker.cmd.Process.Kill()
+			return r.initPool(r.poolSize)
 		case "error":
+			initWorker.cmd.Process.Kill()
 			return fmt.Errorf("script init error: %s", resp.Message)
 		}
+	}
+
+	initWorker.cmd.Process.Kill()
+	return fmt.Errorf("script ended unexpectedly during init")
+}
+
+func (r *ExternalRunner) initPool(n int) error {
+	r.workers = make([]*externalWorker, 0, n)
+	r.workerPool = make(chan *externalWorker, n)
+
+	for i := 0; i < n; i++ {
+		w, err := r.spawnWorker()
+		if err != nil {
+			// Kill any already-spawned workers before returning the error.
+			for _, existing := range r.workers {
+				existing.cmd.Process.Kill()
+			}
+			return fmt.Errorf("spawning worker %d: %w", i, err)
+		}
+		r.workers = append(r.workers, w)
+		r.workerPool <- w
 	}
 
 	return nil
 }
 
 func (r *ExternalRunner) Setup() (interface{}, error) {
-	if err := r.stdin.Encode(externalCmd{Cmd: "setup"}); err != nil {
+	w := <-r.workerPool
+	defer func() { r.workerPool <- w }()
+
+	if err := w.stdin.Encode(externalCmd{Cmd: "setup"}); err != nil {
 		return nil, err
 	}
-	return r.readUntilDone()
+	return r.readUntilDone(w)
 }
 
 func (r *ExternalRunner) Iterate(vuID int, data interface{}) error {
-	r.mu.Lock()
-	defer r.mu.Unlock()
+	w := <-r.workerPool
+	defer func() { r.workerPool <- w }()
 
-	if err := r.stdin.Encode(externalCmd{Cmd: "iterate", VuID: vuID, Data: data}); err != nil {
+	if err := w.stdin.Encode(externalCmd{Cmd: "iterate", VuID: vuID, Data: data}); err != nil {
 		return err
 	}
-	_, err := r.readUntilDone()
+	_, err := r.readUntilDone(w)
 	return err
 }
 
 func (r *ExternalRunner) Teardown(data interface{}) error {
-	if err := r.stdin.Encode(externalCmd{Cmd: "teardown", Data: data}); err != nil {
+	w := <-r.workerPool
+	defer func() { r.workerPool <- w }()
+
+	if err := w.stdin.Encode(externalCmd{Cmd: "teardown", Data: data}); err != nil {
 		return err
 	}
-	_, err := r.readUntilDone()
+	_, err := r.readUntilDone(w)
 	return err
 }
 
-func (r *ExternalRunner) readUntilDone() (interface{}, error) {
-	for r.stdout.Scan() {
+func (r *ExternalRunner) readUntilDone(w *externalWorker) (interface{}, error) {
+	for w.stdout.Scan() {
 		var resp externalResponse
-		if err := json.Unmarshal(r.stdout.Bytes(), &resp); err != nil {
+		if err := json.Unmarshal(w.stdout.Bytes(), &resp); err != nil {
 			continue
 		}
 
 		switch resp.Type {
 		case "http":
-			r.executeExternalHTTP(resp)
+			r.executeExternalHTTP(w, resp)
 		case "check":
 			r.metrics.recordCheck(resp.Name, resp.Passed)
 		case "log":
@@ -184,13 +237,13 @@ func (r *ExternalRunner) readUntilDone() (interface{}, error) {
 	return nil, fmt.Errorf("script ended unexpectedly")
 }
 
-func (r *ExternalRunner) executeExternalHTTP(resp externalResponse) {
+func (r *ExternalRunner) executeExternalHTTP(w *externalWorker, resp externalResponse) {
 	start := time.Now()
 
 	req, err := newHTTPRequest(resp.Method, resp.URL, resp.Headers, resp.Body)
 	if err != nil {
 		r.metrics.recordRequest(0, time.Since(start), err)
-		r.stdin.Encode(map[string]interface{}{
+		w.stdin.Encode(map[string]interface{}{
 			"status": 0, "body": "", "duration": 0, "error": err.Error(),
 		})
 		return
@@ -202,7 +255,7 @@ func (r *ExternalRunner) executeExternalHTTP(resp externalResponse) {
 
 	if err != nil {
 		r.metrics.recordRequest(0, duration, err)
-		r.stdin.Encode(map[string]interface{}{
+		w.stdin.Encode(map[string]interface{}{
 			"status": 0, "body": "", "duration": duration.Seconds(), "error": err.Error(),
 		})
 		return
@@ -213,7 +266,7 @@ func (r *ExternalRunner) executeExternalHTTP(resp externalResponse) {
 	r.metrics.recordRequest(httpResp.StatusCode, duration, nil)
 
 	// Send response back to script so it can inspect status, body, etc.
-	r.stdin.Encode(map[string]interface{}{
+	w.stdin.Encode(map[string]interface{}{
 		"status":   httpResp.StatusCode,
 		"body":     string(body),
 		"duration": duration.Seconds(),
@@ -225,10 +278,15 @@ func (r *ExternalRunner) Scenario() *ScenarioConfig { return &r.scenario }
 func (r *ExternalRunner) Metrics() *Metrics          { return r.metrics }
 
 func (r *ExternalRunner) Close() error {
-	if r.cmd != nil && r.cmd.Process != nil {
-		return r.cmd.Process.Kill()
+	var firstErr error
+	for _, w := range r.workers {
+		if w.cmd != nil && w.cmd.Process != nil {
+			if err := w.cmd.Process.Kill(); err != nil && firstErr == nil {
+				firstErr = err
+			}
+		}
 	}
-	return nil
+	return firstErr
 }
 
 func supportedExts() []string {
