@@ -25,6 +25,7 @@ var (
 	scriptDashPort   string
 	scriptWait       bool
 	scriptOut        string
+	scriptReport     string
 )
 
 var scriptCmd = &cobra.Command{
@@ -55,6 +56,7 @@ func init() {
 	scriptCmd.Flags().StringVar(&scriptDashPort, "dash-port", ":8888", "Dashboard listen address")
 	scriptCmd.Flags().BoolVar(&scriptWait, "wait", false, "Wait for trigger from dashboard before starting")
 	scriptCmd.Flags().StringVar(&scriptOut, "out", "", "Export results: json=file.json or junit=report.xml")
+	scriptCmd.Flags().StringVar(&scriptReport, "report", "", "Generate HTML report (e.g. report.html)")
 	rootCmd.AddCommand(scriptCmd)
 }
 
@@ -189,6 +191,13 @@ func runScript(cmd *cobra.Command, args []string) error {
 			if err := runScriptExport(runner, elapsed); err != nil {
 				fmt.Printf("  Export error: %v\n", err)
 			}
+			if scriptReport != "" {
+				if err := script.ExportHTML(scriptReport, runner, elapsed); err != nil {
+					fmt.Printf("  Warning: could not write report: %v\n", err)
+				} else {
+					fmt.Printf("  Report written to: %s\n", scriptReport)
+				}
+			}
 			fmt.Println("  Ready for next run. Click Start in dashboard or Ctrl+C to exit.")
 		}
 	}
@@ -223,6 +232,14 @@ func runScript(cmd *cobra.Command, args []string) error {
 
 	if err := runScriptExport(runner, elapsed); err != nil {
 		fmt.Printf("  Export error: %v\n", err)
+	}
+
+	if scriptReport != "" {
+		if err := script.ExportHTML(scriptReport, runner, elapsed); err != nil {
+			fmt.Printf("  Warning: could not write report: %v\n", err)
+		} else {
+			fmt.Printf("  Report written to: %s\n", scriptReport)
+		}
 	}
 
 	return nil
