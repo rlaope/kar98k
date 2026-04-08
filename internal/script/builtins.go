@@ -12,6 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -28,7 +29,7 @@ type Metrics struct {
 	mu            sync.Mutex
 	TotalRequests int64
 	TotalErrors   int64
-	Durations     []float64
+	Histogram     *hdrhistogram.Histogram
 	StatusCodes   map[int]int64
 	Checks        []CheckResult
 	checkMap      map[string]int
@@ -36,6 +37,8 @@ type Metrics struct {
 
 func newMetrics() *Metrics {
 	return &Metrics{
+		// 1µs to 60s range, 3 significant digits
+		Histogram:   hdrhistogram.New(1, 60000000, 3),
 		StatusCodes: make(map[int]int64),
 		checkMap:    make(map[string]int),
 	}
@@ -50,7 +53,7 @@ func (m *Metrics) recordRequest(status int, duration time.Duration, err error) {
 		atomic.AddInt64(&m.TotalErrors, 1)
 	}
 
-	m.Durations = append(m.Durations, duration.Seconds())
+	m.Histogram.RecordValue(duration.Microseconds())
 	m.StatusCodes[status]++
 }
 

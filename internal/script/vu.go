@@ -3,8 +3,6 @@ package script
 import (
 	"context"
 	"fmt"
-	"math"
-	"sort"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -277,18 +275,10 @@ func (s *VUScheduler) reportProgress(ctx context.Context, totalDuration time.Dur
 			// Calculate latency stats
 			m.mu.Lock()
 			var avgLat, p95Lat, p99Lat float64
-			if len(m.Durations) > 0 {
-				sorted := make([]float64, len(m.Durations))
-				copy(sorted, m.Durations)
-				sort.Float64s(sorted)
-
-				sum := 0.0
-				for _, d := range sorted {
-					sum += d
-				}
-				avgLat = sum / float64(len(sorted))
-				p95Lat = percentile(sorted, 95)
-				p99Lat = percentile(sorted, 99)
+			if m.Histogram.TotalCount() > 0 {
+				avgLat = m.Histogram.Mean() / 1e6
+				p95Lat = float64(m.Histogram.ValueAtPercentile(95)) / 1e6
+				p99Lat = float64(m.Histogram.ValueAtPercentile(99)) / 1e6
 			}
 
 			var checkStats []map[string]interface{}
@@ -371,26 +361,26 @@ func PrintReport(runner Runner, elapsed time.Duration) bool {
 
 	// Latency stats
 	m.mu.Lock()
-	durations := make([]float64, len(m.Durations))
-	copy(durations, m.Durations)
+	histCount := m.Histogram.TotalCount()
+	var minLat, avgLat, maxLat, p50Lat, p95Lat, p99Lat float64
+	if histCount > 0 {
+		minLat = float64(m.Histogram.Min()) / 1e6
+		avgLat = m.Histogram.Mean() / 1e6
+		maxLat = float64(m.Histogram.Max()) / 1e6
+		p50Lat = float64(m.Histogram.ValueAtPercentile(50)) / 1e6
+		p95Lat = float64(m.Histogram.ValueAtPercentile(95)) / 1e6
+		p99Lat = float64(m.Histogram.ValueAtPercentile(99)) / 1e6
+	}
 	m.mu.Unlock()
 
-	if len(durations) > 0 {
-		sort.Float64s(durations)
-
-		avg := 0.0
-		for _, d := range durations {
-			avg += d
-		}
-		avg /= float64(len(durations))
-
+	if histCount > 0 {
 		fmt.Printf("\n  Latency:\n")
-		fmt.Printf("    Min:  %s\n", fmtDuration(durations[0]))
-		fmt.Printf("    Avg:  %s\n", fmtDuration(avg))
-		fmt.Printf("    Max:  %s\n", fmtDuration(durations[len(durations)-1]))
-		fmt.Printf("    P50:  %s\n", fmtDuration(percentile(durations, 50)))
-		fmt.Printf("    P95:  %s\n", fmtDuration(percentile(durations, 95)))
-		fmt.Printf("    P99:  %s\n", fmtDuration(percentile(durations, 99)))
+		fmt.Printf("    Min:  %s\n", fmtDuration(minLat))
+		fmt.Printf("    Avg:  %s\n", fmtDuration(avgLat))
+		fmt.Printf("    Max:  %s\n", fmtDuration(maxLat))
+		fmt.Printf("    P50:  %s\n", fmtDuration(p50Lat))
+		fmt.Printf("    P95:  %s\n", fmtDuration(p95Lat))
+		fmt.Printf("    P99:  %s\n", fmtDuration(p99Lat))
 	}
 
 	// Status codes
@@ -422,7 +412,7 @@ func PrintReport(runner Runner, elapsed time.Duration) bool {
 	if len(sc.Thresholds) > 0 {
 		fmt.Printf("\n  Thresholds:\n")
 		for metric, condition := range sc.Thresholds {
-			passed := evaluateThreshold(metric, condition, m, durations)
+			passed := evaluateThreshold(metric, condition, m)
 			if !passed {
 				allPassed = false
 			}
@@ -438,20 +428,6 @@ func PrintReport(runner Runner, elapsed time.Duration) bool {
 	return allPassed
 }
 
-func percentile(sorted []float64, p float64) float64 {
-	if len(sorted) == 0 {
-		return 0
-	}
-	idx := int(math.Ceil(p/100*float64(len(sorted)))) - 1
-	if idx < 0 {
-		idx = 0
-	}
-	if idx >= len(sorted) {
-		idx = len(sorted) - 1
-	}
-	return sorted[idx]
-}
-
 func fmtDuration(seconds float64) string {
 	d := time.Duration(seconds * float64(time.Second))
 	if d < time.Millisecond {
@@ -463,7 +439,7 @@ func fmtDuration(seconds float64) string {
 	return fmt.Sprintf("%.2fs", seconds)
 }
 
-func evaluateThreshold(metric, condition string, m *Metrics, durations []float64) bool {
+func evaluateThreshold(metric, condition string, m *Metrics) bool {
 	// Basic threshold evaluation for common patterns
 	switch {
 	case metric == "http_req_failed":
@@ -491,16 +467,22 @@ func evaluateThreshold(metric, condition string, m *Metrics, durations []float64
 
 	default:
 		// Duration-based thresholds like http_req_duration{p95}
-		if len(durations) == 0 {
+		m.mu.Lock()
+		count := m.Histogram.TotalCount()
+		var p95ms, p99ms float64
+		if count > 0 {
+			p95ms = float64(m.Histogram.ValueAtPercentile(95)) / 1000 // µs to ms
+			p99ms = float64(m.Histogram.ValueAtPercentile(99)) / 1000
+		}
+		m.mu.Unlock()
+		if count == 0 {
 			return true
 		}
 		if contains(metric, "p95") {
-			p95 := percentile(durations, 95) * 1000 // to ms
-			return parseAndCompareDuration(p95, condition)
+			return parseAndCompareDuration(p95ms, condition)
 		}
 		if contains(metric, "p99") {
-			p99 := percentile(durations, 99) * 1000
-			return parseAndCompareDuration(p99, condition)
+			return parseAndCompareDuration(p99ms, condition)
 		}
 		return true
 	}
