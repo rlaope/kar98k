@@ -24,6 +24,7 @@ var (
 	scriptDashboard  bool
 	scriptDashPort   string
 	scriptWait       bool
+	scriptOut        string
 )
 
 var scriptCmd = &cobra.Command{
@@ -53,6 +54,7 @@ func init() {
 	scriptCmd.Flags().BoolVar(&scriptDashboard, "dashboard", false, "Enable real-time web dashboard")
 	scriptCmd.Flags().StringVar(&scriptDashPort, "dash-port", ":8888", "Dashboard listen address")
 	scriptCmd.Flags().BoolVar(&scriptWait, "wait", false, "Wait for trigger from dashboard before starting")
+	scriptCmd.Flags().StringVar(&scriptOut, "out", "", "Export results: json=file.json or junit=report.xml")
 	rootCmd.AddCommand(scriptCmd)
 }
 
@@ -184,6 +186,9 @@ func runScript(cmd *cobra.Command, args []string) error {
 			if !script.PrintReport(runner, elapsed) {
 				fmt.Println("  Threshold check failed.")
 			}
+			if err := runScriptExport(runner, elapsed); err != nil {
+				fmt.Printf("  Export error: %v\n", err)
+			}
 			fmt.Println("  Ready for next run. Click Start in dashboard or Ctrl+C to exit.")
 		}
 	}
@@ -216,6 +221,39 @@ func runScript(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("threshold check failed")
 	}
 
+	if err := runScriptExport(runner, elapsed); err != nil {
+		fmt.Printf("  Export error: %v\n", err)
+	}
+
+	return nil
+}
+
+// runScriptExport parses the --out flag and writes the appropriate export file.
+func runScriptExport(runner script.Runner, elapsed time.Duration) error {
+	if scriptOut == "" {
+		return nil
+	}
+
+	parts := strings.SplitN(scriptOut, "=", 2)
+	if len(parts) != 2 {
+		return fmt.Errorf("invalid --out format %q: expected type=path (e.g. json=results.json)", scriptOut)
+	}
+	outType, outPath := parts[0], parts[1]
+
+	switch outType {
+	case "json":
+		if err := script.ExportJSON(outPath, runner, elapsed); err != nil {
+			return err
+		}
+		fmt.Printf("  JSON results written to %s\n", outPath)
+	case "junit":
+		if err := script.ExportJUnit(outPath, runner, elapsed); err != nil {
+			return err
+		}
+		fmt.Printf("  JUnit XML written to %s\n", outPath)
+	default:
+		return fmt.Errorf("unknown --out type %q: use json or junit", outType)
+	}
 	return nil
 }
 
