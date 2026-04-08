@@ -342,8 +342,8 @@ func (s *VUScheduler) reportProgress(ctx context.Context, totalDuration time.Dur
 	}
 }
 
-// PrintReport prints the final test report.
-func PrintReport(runner Runner, elapsed time.Duration) {
+// PrintReport prints the final test report and returns true if all thresholds passed.
+func PrintReport(runner Runner, elapsed time.Duration) bool {
 	m := runner.Metrics()
 	sc := runner.Scenario()
 
@@ -418,11 +418,14 @@ func PrintReport(runner Runner, elapsed time.Duration) {
 	m.mu.Unlock()
 
 	// Thresholds
+	allPassed := true
 	if len(sc.Thresholds) > 0 {
 		fmt.Printf("\n  Thresholds:\n")
 		for metric, condition := range sc.Thresholds {
-			// Simple threshold evaluation
 			passed := evaluateThreshold(metric, condition, m, durations)
+			if !passed {
+				allPassed = false
+			}
 			mark := "✓"
 			if !passed {
 				mark = "✗"
@@ -432,6 +435,7 @@ func PrintReport(runner Runner, elapsed time.Duration) {
 	}
 
 	fmt.Println()
+	return allPassed
 }
 
 func percentile(sorted []float64, p float64) float64 {

@@ -181,7 +181,9 @@ func runScript(cmd *cobra.Command, args []string) error {
 			elapsed := time.Since(startTime)
 			dash.SetRunning(false)
 
-			script.PrintReport(runner, elapsed)
+			if !script.PrintReport(runner, elapsed) {
+				fmt.Println("  Threshold check failed.")
+			}
 			fmt.Println("  Ready for next run. Click Start in dashboard or Ctrl+C to exit.")
 		}
 	}
@@ -210,7 +212,9 @@ func runScript(cmd *cobra.Command, args []string) error {
 	}
 	elapsed := time.Since(startTime)
 
-	script.PrintReport(runner, elapsed)
+	if !script.PrintReport(runner, elapsed) {
+		return fmt.Errorf("threshold check failed")
+	}
 
 	return nil
 }

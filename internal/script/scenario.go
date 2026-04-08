@@ -35,6 +35,14 @@ type Stage struct {
 
 // Presets for chaos configuration.
 var chaosPresets = map[string]ChaosConfig{
+	"none": {
+		Preset:         "none",
+		SpikeFactor:    1.0,
+		Lambda:         0,
+		NoiseAmplitude: 0,
+		MinInterval:    0,
+		MaxInterval:    0,
+	},
 	"gentle": {
 		Preset:         "gentle",
 		SpikeFactor:    1.5,
@@ -150,7 +158,7 @@ func chaosBuiltin(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tu
 
 	base, ok := chaosPresets[presetStr]
 	if !ok {
-		return nil, fmt.Errorf("unknown chaos preset %q (use: gentle, moderate, aggressive)", presetStr)
+		return nil, fmt.Errorf("unknown chaos preset %q (use: none, gentle, moderate, aggressive)", presetStr)
 	}
 
 	if hasSpike {
