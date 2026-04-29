@@ -241,13 +241,15 @@ func (c *Controller) Stop() {
 
 // GetStatus returns the current controller status.
 type Status struct {
-	BaseTPS           float64
-	MaxTPS            float64
+	BaseTPS            float64
+	MaxTPS             float64
 	ScheduleMultiplier float64
-	CurrentHour       int
-	ActiveWorkers     int
-	QueueSize         int
-	PatternStatus     pattern.Status
+	CurrentHour        int
+	ActiveWorkers      int
+	QueueSize          int
+	QueueDrops         int64   // lifetime count of dropped jobs
+	QueueDropRate      float64 // sustained drop rate over the last 60s, 0..1
+	PatternStatus      pattern.Status
 }
 
 // GetStatus returns the current status.
@@ -261,6 +263,8 @@ func (c *Controller) GetStatus() Status {
 		CurrentHour:        schedInfo.CurrentHour,
 		ActiveWorkers:      c.pool.Active(),
 		QueueSize:          c.pool.QueueSize(),
+		QueueDrops:         c.pool.TotalDrops(),
+		QueueDropRate:      c.pool.DropRate(),
 		PatternStatus:      c.engine.GetStatus(),
 	}
 }

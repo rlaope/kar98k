@@ -150,6 +150,14 @@ func printStatus(status daemon.Status) {
 	content.WriteString(fmt.Sprintf("  Requests:  %s\n", tui.ValueStyle.Render(fmt.Sprintf("%d", status.RequestsSent))))
 	content.WriteString(fmt.Sprintf("  Errors:    %s\n", tui.ErrorStyle.Render(fmt.Sprintf("%d", status.ErrorCount))))
 	content.WriteString(fmt.Sprintf("  Latency:   %s\n", tui.ValueStyle.Render(fmt.Sprintf("%.1fms", status.AvgLatency))))
+
+	// Drops — render in red when sustained rate is above the warn threshold (1%)
+	dropRender := tui.ValueStyle.Render
+	if status.QueueDropRate > 0.01 {
+		dropRender = tui.ErrorStyle.Render
+	}
+	content.WriteString(fmt.Sprintf("  Drops:     %s\n",
+		dropRender(fmt.Sprintf("%d (%.2f%% sustained)", status.QueueDrops, status.QueueDropRate*100))))
 	content.WriteString("\n")
 
 	// Target

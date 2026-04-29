@@ -25,18 +25,20 @@ const (
 
 // Status represents the current daemon status
 type Status struct {
-	Running      bool      `json:"running"`
-	Triggered    bool      `json:"triggered"`
-	StartTime    time.Time `json:"start_time"`
-	Uptime       string    `json:"uptime"`
-	CurrentTPS   float64   `json:"current_tps"`
-	TargetTPS    float64   `json:"target_tps"`
-	RequestsSent int64     `json:"requests_sent"`
-	ErrorCount   int64     `json:"error_count"`
-	AvgLatency   float64   `json:"avg_latency_ms"`
-	IsSpiking    bool      `json:"is_spiking"`
-	TargetURL    string    `json:"target_url"`
-	Protocol     string    `json:"protocol"`
+	Running        bool      `json:"running"`
+	Triggered      bool      `json:"triggered"`
+	StartTime      time.Time `json:"start_time"`
+	Uptime         string    `json:"uptime"`
+	CurrentTPS     float64   `json:"current_tps"`
+	TargetTPS      float64   `json:"target_tps"`
+	RequestsSent   int64     `json:"requests_sent"`
+	ErrorCount     int64     `json:"error_count"`
+	AvgLatency     float64   `json:"avg_latency_ms"`
+	IsSpiking      bool      `json:"is_spiking"`
+	TargetURL      string    `json:"target_url"`
+	Protocol       string    `json:"protocol"`
+	QueueDrops     int64     `json:"queue_drops"`
+	QueueDropRate  float64   `json:"queue_drop_rate"`
 }
 
 // Command represents a command sent to the daemon
@@ -219,6 +221,8 @@ func (d *Daemon) GetStatus() Status {
 		ctrlStatus := d.ctrl.GetStatus()
 		status.CurrentTPS = ctrlStatus.PatternStatus.BaseTPS
 		status.IsSpiking = ctrlStatus.PatternStatus.PoissonSpiking
+		status.QueueDrops = ctrlStatus.QueueDrops
+		status.QueueDropRate = ctrlStatus.QueueDropRate
 	}
 
 	return status
@@ -388,12 +392,14 @@ func (d *Daemon) monitorEvents() {
 
 			// Periodic status (every 10 seconds)
 			if time.Now().Second()%10 == 0 {
-				d.log("STATUS: TPS=%.0f, Requests=%d, Errors=%d, Workers=%d, Queue=%d",
+				d.log("STATUS: TPS=%.0f, Requests=%d, Errors=%d, Workers=%d, Queue=%d, Drops=%d (%.2f%%)",
 					currentTPS,
 					totalRequests,
 					d.status.ErrorCount,
 					status.ActiveWorkers,
-					status.QueueSize)
+					status.QueueSize,
+					status.QueueDrops,
+					status.QueueDropRate*100)
 			}
 
 			lastSpiking = isSpiking
