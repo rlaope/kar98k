@@ -100,6 +100,17 @@ func (e *Engine) IsManualSpike() bool {
 	return e.poisson.IsManualSpike()
 }
 
+// SpikeKind describes whether a spike is currently active and how it
+// was triggered. "none" — no spike active. "auto" — Poisson-scheduled
+// spike. "manual" — operator-triggered via TriggerManualSpike.
+type SpikeKind string
+
+const (
+	SpikeKindNone   SpikeKind = "none"
+	SpikeKindAuto   SpikeKind = "auto"
+	SpikeKindManual SpikeKind = "manual"
+)
+
 // Status returns the current status of all pattern generators.
 type Status struct {
 	BaseTPS           float64
@@ -110,6 +121,14 @@ type Status struct {
 	PoissonMultiplier float64
 	NoiseEnabled      bool
 	NoiseMultiplier   float64
+
+	// SpikeKind reflects whether a spike is currently active and its
+	// origin (auto vs manual). Useful for distinguishing "spiking now
+	// (manual)" from "spiking now (auto)" in user-facing surfaces.
+	SpikeKind SpikeKind
+	// NextSpikeIn is the duration until the next scheduled (auto)
+	// spike. Zero while a spike is currently active.
+	NextSpikeIn time.Duration
 }
 
 // GetStatus returns the current status of the pattern engine.
@@ -123,14 +142,25 @@ func (e *Engine) GetStatus() Status {
 		currentTPS = e.maxTPS
 	}
 
+	spiking := e.poisson.IsSpiking()
+	kind := SpikeKindNone
+	switch {
+	case spiking && e.poisson.IsManualSpike():
+		kind = SpikeKindManual
+	case spiking:
+		kind = SpikeKindAuto
+	}
+
 	return Status{
 		BaseTPS:           e.baseTPS,
 		MaxTPS:            e.maxTPS,
 		CurrentTPS:        currentTPS,
 		PoissonEnabled:    e.poisson.cfg.Enabled,
-		PoissonSpiking:    e.poisson.IsSpiking(),
+		PoissonSpiking:    spiking,
 		PoissonMultiplier: e.poisson.Multiplier(),
 		NoiseEnabled:      e.noise.Enabled(),
 		NoiseMultiplier:   e.noise.Multiplier(),
+		SpikeKind:         kind,
+		NextSpikeIn:       e.poisson.NextSpikeIn(),
 	}
 }

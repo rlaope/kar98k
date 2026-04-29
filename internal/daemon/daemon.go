@@ -35,6 +35,8 @@ type Status struct {
 	ErrorCount   int64     `json:"error_count"`
 	AvgLatency   float64   `json:"avg_latency_ms"`
 	IsSpiking    bool      `json:"is_spiking"`
+	SpikeKind    string    `json:"spike_kind"`     // "none" | "auto" | "manual"
+	NextSpikeIn  string    `json:"next_spike_in"`  // e.g. "2m13s", or "" while spiking
 	TargetURL    string    `json:"target_url"`
 	Protocol     string    `json:"protocol"`
 }
@@ -219,6 +221,10 @@ func (d *Daemon) GetStatus() Status {
 		ctrlStatus := d.ctrl.GetStatus()
 		status.CurrentTPS = ctrlStatus.PatternStatus.BaseTPS
 		status.IsSpiking = ctrlStatus.PatternStatus.PoissonSpiking
+		status.SpikeKind = string(ctrlStatus.PatternStatus.SpikeKind)
+		if !ctrlStatus.PatternStatus.PoissonSpiking && ctrlStatus.PatternStatus.NextSpikeIn > 0 {
+			status.NextSpikeIn = ctrlStatus.PatternStatus.NextSpikeIn.Round(time.Second).String()
+		}
 	}
 
 	return status
