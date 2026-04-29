@@ -7,10 +7,20 @@ import (
 	"sync/atomic"
 	"time"
 
+	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/kar98k/internal/config"
 	"github.com/kar98k/internal/health"
 	"github.com/kar98k/pkg/protocol"
 	"golang.org/x/time/rate"
+)
+
+// Latency histogram bounds: 1µs..60s with 3 significant digits, matching
+// internal/script/builtins.go and internal/discovery/analyzer.go so the
+// three latency surfaces stay comparable.
+const (
+	latencyHistMin    = 1
+	latencyHistMax    = 60_000_000
+	latencyHistSigFig = 3
 )
 
 // Job represents a single request job.
@@ -32,6 +42,12 @@ type Pool struct {
 	mu       sync.RWMutex
 	tpsCount int64
 	lastTPS  time.Time
+
+	// Latency tracking. hdrhistogram.Histogram is not goroutine-safe,
+	// so all access is serialised through latMu.
+	latMu        sync.Mutex
+	latRaw       *hdrhistogram.Histogram // observed latency (t_done - t_sent)
+	latCorrected *hdrhistogram.Histogram // CO-corrected via RecordValueWithExpectedInterval
 }
 
 // NewPool creates a new worker pool.
@@ -50,12 +66,14 @@ func NewPool(cfg config.Worker, metrics *health.Metrics) *Pool {
 	}
 
 	return &Pool{
-		cfg:     cfg,
-		metrics: metrics,
-		clients: clients,
-		limiter: rate.NewLimiter(rate.Limit(100), 1), // Initial rate, will be updated
-		jobs:    make(chan Job, cfg.QueueSize),
-		lastTPS: time.Now(),
+		cfg:          cfg,
+		metrics:      metrics,
+		clients:      clients,
+		limiter:      rate.NewLimiter(rate.Limit(100), 1), // Initial rate, will be updated
+		jobs:         make(chan Job, cfg.QueueSize),
+		lastTPS:      time.Now(),
+		latRaw:       hdrhistogram.New(latencyHistMin, latencyHistMax, latencyHistSigFig),
+		latCorrected: hdrhistogram.New(latencyHistMin, latencyHistMax, latencyHistSigFig),
 	}
 }
 
@@ -129,8 +147,45 @@ func (p *Pool) processJob(ctx context.Context, job Job) {
 		resp.Duration.Seconds(),
 	)
 
+	p.recordLatency(resp.Duration)
+
 	// Increment TPS counter
 	atomic.AddInt64(&p.tpsCount, 1)
+}
+
+// recordLatency feeds an observed request duration into both the raw
+// and the coordinated-omission-corrected histograms. The expected
+// inter-request interval is derived from the rate limiter's current
+// limit. If the limit is unset (e.g. before SetRate has been called)
+// the corrected histogram receives the raw value with no synthesis.
+//
+// Coordinated-omission correction: when the server stalls for many
+// intervals, the *raw* histogram only sees the single slow call that
+// eventually returned, while the *corrected* histogram synthesises
+// samples for every slot that should have been issued during the
+// stall. Surfacing both lets a reader tell whether a tail-latency
+// regression is real or a measurement artifact.
+func (p *Pool) recordLatency(observed time.Duration) {
+	micros := observed.Microseconds()
+	if micros < latencyHistMin {
+		micros = latencyHistMin
+	} else if micros > latencyHistMax {
+		micros = latencyHistMax
+	}
+
+	expectedMicros := int64(0)
+	if r := float64(p.limiter.Limit()); r > 0 {
+		expectedMicros = int64(1_000_000 / r)
+	}
+
+	p.latMu.Lock()
+	_ = p.latRaw.RecordValue(micros)
+	if expectedMicros > 0 {
+		_ = p.latCorrected.RecordCorrectedValue(micros, expectedMicros)
+	} else {
+		_ = p.latCorrected.RecordValue(micros)
+	}
+	p.latMu.Unlock()
 }
 
 // measureTPS periodically calculates and updates the actual TPS.
@@ -192,6 +247,33 @@ func (p *Pool) Active() int {
 // QueueSize returns the current queue length.
 func (p *Pool) QueueSize() int {
 	return len(p.jobs)
+}
+
+// LatencyPercentile returns the requested percentile (0..100) in
+// milliseconds. When corrected is true, the coordinated-omission
+// corrected histogram is read; otherwise the raw observed histogram is
+// returned. Returns 0 when no samples are recorded.
+func (p *Pool) LatencyPercentile(percentile float64, corrected bool) float64 {
+	p.latMu.Lock()
+	defer p.latMu.Unlock()
+
+	hist := p.latRaw
+	if corrected {
+		hist = p.latCorrected
+	}
+	if hist.TotalCount() == 0 {
+		return 0
+	}
+	return float64(hist.ValueAtQuantile(percentile)) / 1000.0
+}
+
+// LatencySamples returns (raw, corrected) sample counts. The corrected
+// count is typically larger because RecordValueWithExpectedInterval
+// synthesises samples for each missed slot during a stall.
+func (p *Pool) LatencySamples() (rawN, correctedN int64) {
+	p.latMu.Lock()
+	defer p.latMu.Unlock()
+	return p.latRaw.TotalCount(), p.latCorrected.TotalCount()
 }
 
 // Stop gracefully stops the worker pool.

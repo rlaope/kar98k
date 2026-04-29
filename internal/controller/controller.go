@@ -241,13 +241,21 @@ func (c *Controller) Stop() {
 
 // GetStatus returns the current controller status.
 type Status struct {
-	BaseTPS           float64
-	MaxTPS            float64
+	BaseTPS            float64
+	MaxTPS             float64
 	ScheduleMultiplier float64
-	CurrentHour       int
-	ActiveWorkers     int
-	QueueSize         int
-	PatternStatus     pattern.Status
+	CurrentHour        int
+	ActiveWorkers      int
+	QueueSize          int
+	// Latency percentiles in milliseconds. *Raw values come from
+	// observed request durations only; *Corrected values are
+	// CO-corrected and synthesise samples for slots missed during
+	// stalls. Both reach 0 before the first sample is recorded.
+	LatencyP95Raw       float64
+	LatencyP99Raw       float64
+	LatencyP95Corrected float64
+	LatencyP99Corrected float64
+	PatternStatus       pattern.Status
 }
 
 // GetStatus returns the current status.
@@ -255,12 +263,16 @@ func (c *Controller) GetStatus() Status {
 	schedInfo := c.scheduler.GetInfo()
 
 	return Status{
-		BaseTPS:            c.cfg.BaseTPS,
-		MaxTPS:             c.cfg.MaxTPS,
-		ScheduleMultiplier: schedInfo.CurrentMultiplier,
-		CurrentHour:        schedInfo.CurrentHour,
-		ActiveWorkers:      c.pool.Active(),
-		QueueSize:          c.pool.QueueSize(),
-		PatternStatus:      c.engine.GetStatus(),
+		BaseTPS:             c.cfg.BaseTPS,
+		MaxTPS:              c.cfg.MaxTPS,
+		ScheduleMultiplier:  schedInfo.CurrentMultiplier,
+		CurrentHour:         schedInfo.CurrentHour,
+		ActiveWorkers:       c.pool.Active(),
+		QueueSize:           c.pool.QueueSize(),
+		LatencyP95Raw:       c.pool.LatencyPercentile(95, false),
+		LatencyP99Raw:       c.pool.LatencyPercentile(99, false),
+		LatencyP95Corrected: c.pool.LatencyPercentile(95, true),
+		LatencyP99Corrected: c.pool.LatencyPercentile(99, true),
+		PatternStatus:       c.engine.GetStatus(),
 	}
 }

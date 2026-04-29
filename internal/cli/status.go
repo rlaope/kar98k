@@ -150,6 +150,19 @@ func printStatus(status daemon.Status) {
 	content.WriteString(fmt.Sprintf("  Requests:  %s\n", tui.ValueStyle.Render(fmt.Sprintf("%d", status.RequestsSent))))
 	content.WriteString(fmt.Sprintf("  Errors:    %s\n", tui.ErrorStyle.Render(fmt.Sprintf("%d", status.ErrorCount))))
 	content.WriteString(fmt.Sprintf("  Latency:   %s\n", tui.ValueStyle.Render(fmt.Sprintf("%.1fms", status.AvgLatency))))
+
+	// Latency tail. Show raw vs CO-corrected when both have samples.
+	// The corrected values reveal latency hidden by coordinated omission
+	// during stalls; if they sit far above raw, the system spent time in
+	// "missed slots" that the raw histogram never saw.
+	if status.LatencyP95Raw > 0 || status.LatencyP95Corrected > 0 {
+		content.WriteString(fmt.Sprintf("  P95:       %s  %s\n",
+			tui.ValueStyle.Render(fmt.Sprintf("%.1fms raw", status.LatencyP95Raw)),
+			tui.DimStyle.Render(fmt.Sprintf("/ %.1fms corrected", status.LatencyP95Corrected))))
+		content.WriteString(fmt.Sprintf("  P99:       %s  %s\n",
+			tui.ValueStyle.Render(fmt.Sprintf("%.1fms raw", status.LatencyP99Raw)),
+			tui.DimStyle.Render(fmt.Sprintf("/ %.1fms corrected", status.LatencyP99Corrected))))
+	}
 	content.WriteString("\n")
 
 	// Target

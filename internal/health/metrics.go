@@ -18,10 +18,18 @@ type Metrics struct {
 	TargetHealth     *prometheus.GaugeVec
 }
 
-// NewMetrics creates and registers all Prometheus metrics.
+// NewMetrics creates and registers all Prometheus metrics on the default registry.
 func NewMetrics() *Metrics {
+	return NewMetricsWithRegistry(prometheus.DefaultRegisterer)
+}
+
+// NewMetricsWithRegistry creates and registers all Prometheus metrics on the
+// supplied registerer. Tests use a fresh registry to avoid duplicate-registration
+// panics from promauto.
+func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
+	f := promauto.With(reg)
 	return &Metrics{
-		RequestsTotal: promauto.NewCounterVec(
+		RequestsTotal: f.NewCounterVec(
 			prometheus.CounterOpts{
 				Namespace: "kar98k",
 				Name:      "requests_total",
@@ -29,7 +37,7 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"target", "status", "protocol"},
 		),
-		RequestDuration: promauto.NewHistogramVec(
+		RequestDuration: f.NewHistogramVec(
 			prometheus.HistogramOpts{
 				Namespace: "kar98k",
 				Name:      "request_duration_seconds",
@@ -38,49 +46,49 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"target", "protocol"},
 		),
-		RequestsInFlight: promauto.NewGauge(
+		RequestsInFlight: f.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kar98k",
 				Name:      "requests_in_flight",
 				Help:      "Current number of requests being processed",
 			},
 		),
-		CurrentTPS: promauto.NewGauge(
+		CurrentTPS: f.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kar98k",
 				Name:      "current_tps",
 				Help:      "Current actual TPS being generated",
 			},
 		),
-		TargetTPS: promauto.NewGauge(
+		TargetTPS: f.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kar98k",
 				Name:      "target_tps",
 				Help:      "Target TPS setting",
 			},
 		),
-		ActiveWorkers: promauto.NewGauge(
+		ActiveWorkers: f.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kar98k",
 				Name:      "active_workers",
 				Help:      "Number of active worker goroutines",
 			},
 		),
-		QueuedRequests: promauto.NewGauge(
+		QueuedRequests: f.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kar98k",
 				Name:      "queued_requests",
 				Help:      "Number of requests waiting in queue",
 			},
 		),
-		SpikeActive: promauto.NewGauge(
+		SpikeActive: f.NewGauge(
 			prometheus.GaugeOpts{
 				Namespace: "kar98k",
 				Name:      "spike_active",
 				Help:      "Whether a traffic spike is currently active (1=yes, 0=no)",
 			},
 		),
-		TargetHealth: promauto.NewGaugeVec(
+		TargetHealth: f.NewGaugeVec(
 			prometheus.GaugeOpts{
 				Namespace: "kar98k",
 				Name:      "target_health",
