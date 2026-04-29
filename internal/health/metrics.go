@@ -22,6 +22,9 @@ type Metrics struct {
 	// Scenario phase metrics (issue #63).
 	ScenarioPhaseIndex           prometheus.Gauge
 	ScenarioPhaseTransitionsTotal *prometheus.CounterVec
+
+	// Circuit breaker state (issue #59). 0 = closed, 1 = open.
+	CircuitBreakerState prometheus.Gauge
 }
 
 // NewMetrics creates and registers all Prometheus metrics on the default registry.
@@ -131,6 +134,13 @@ func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
 			},
 			[]string{"from", "to"},
 		),
+		CircuitBreakerState: f.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "kar98k",
+				Name:      "circuit_breaker_state",
+				Help:      "Circuit breaker state — 0 = closed (traffic flowing), 1 = open (traffic paused)",
+			},
+		),
 	}
 }
 
@@ -203,6 +213,12 @@ func (m *Metrics) SetScenarioPhaseIndex(idx int) {
 // from is empty string for the initial entry into the first phase.
 func (m *Metrics) RecordScenarioTransition(from, to string) {
 	m.ScenarioPhaseTransitionsTotal.WithLabelValues(from, to).Inc()
+}
+
+// SetCircuitBreakerState updates the breaker state gauge. Pass 0 for
+// closed (traffic flowing) and 1 for open (traffic paused).
+func (m *Metrics) SetCircuitBreakerState(v float64) {
+	m.CircuitBreakerState.Set(v)
 }
 
 // IncRequestsInFlight increments the in-flight requests counter.

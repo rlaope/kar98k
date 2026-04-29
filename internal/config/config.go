@@ -10,6 +10,7 @@ type Config struct {
 	Worker     Worker     `yaml:"worker"`
 	Health     Health     `yaml:"health"`
 	Metrics    Metrics    `yaml:"metrics"`
+	Safety     Safety     `yaml:"safety,omitempty"`
 	// Scenarios optionally defines a sequence of phases (warmup,
 	// baseline, spike-train, soak, cooldown, etc.) that the controller
 	// advances through on a wall-clock timeline. When empty, the
@@ -171,6 +172,20 @@ type Metrics struct {
 	Enabled bool   `yaml:"enabled"`
 	Address string `yaml:"address"`
 	Path    string `yaml:"path"`
+}
+
+// Safety configures the circuit breaker that pauses traffic when
+// error rate or P95 latency exceeds operator-defined thresholds for a
+// sustained window. When tripped the controller stops feeding the
+// worker pool but keeps workers, connections, and the rate limiter
+// alive — so resume is instantaneous.
+type Safety struct {
+	Enabled         bool          `yaml:"enabled"`
+	ErrorRateAbove  float64       `yaml:"error_rate_above,omitempty"`  // % (0..100); 0 disables this check
+	P95LatencyAbove time.Duration `yaml:"p95_latency_above,omitempty"` // 0 disables this check
+	SustainedFor    time.Duration `yaml:"sustained_for"`               // window the breach must hold for
+	ResumeAfter     time.Duration `yaml:"resume_after,omitempty"`      // 0 disables auto-resume
+	Webhook         string        `yaml:"webhook,omitempty"`           // optional URL pinged on transitions
 }
 
 // Discovery configures the adaptive load discovery feature.

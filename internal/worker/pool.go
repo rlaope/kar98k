@@ -67,6 +67,21 @@ type Pool struct {
 	dropRate     uint64 // float64 bits, set/read atomically
 	lastDropWarn time.Time
 
+	// Request/error tracking — same per-second ring buffer pattern as
+	// drops, used by the circuit breaker (#59) to compute sustained
+	// error rate. requestSlot/errorSlot are bumped from the hot path
+	// via atomics; the histories are owned by measureTPS.
+	requestSlot   int64
+	errorSlot     int64
+	requestHist   [dropWindow]int64
+	errorHist     [dropWindow]int64
+	errorRateBits uint64 // float64 bits, set/read atomically
+
+	// paused is set by Pause/Resume. While paused, processJob returns
+	// without firing the request — workers stay alive, the rate limiter
+	// keeps its setting, but no traffic flows.
+	paused atomic.Bool
+
 	// Latency tracking. hdrhistogram.Histogram is not goroutine-safe,
 	// so all access is serialised through latMu.
 	latMu        sync.Mutex
@@ -141,6 +156,13 @@ func (p *Pool) processJob(ctx context.Context, job Job) {
 		return // Context cancelled
 	}
 
+	// Circuit breaker pause: keep the worker goroutine alive (and the
+	// connection pool warm) but don't actually send anything. The rate
+	// limiter's setting is preserved so resume is instantaneous.
+	if p.paused.Load() {
+		return
+	}
+
 	atomic.AddInt64(&p.active, 1)
 	p.metrics.IncRequestsInFlight()
 	defer func() {
@@ -173,8 +195,13 @@ func (p *Pool) processJob(ctx context.Context, job Job) {
 
 	p.recordLatency(resp.Duration)
 
-	// Increment TPS counter
+	// Increment TPS counter and feed the per-second request/error
+	// slots so the breaker can compute a sustained error rate.
 	atomic.AddInt64(&p.tpsCount, 1)
+	atomic.AddInt64(&p.requestSlot, 1)
+	if resp.StatusCode >= 500 || resp.StatusCode == 0 {
+		atomic.AddInt64(&p.errorSlot, 1)
+	}
 }
 
 // recordLatency feeds an observed request duration into both the raw
@@ -230,8 +257,65 @@ func (p *Pool) measureTPS(ctx context.Context) {
 			drops := atomic.SwapInt64(&p.dropCount, 0)
 			submits := atomic.SwapInt64(&p.submitCount, 0)
 			p.recordDropSlot(drops, submits)
+
+			reqs := atomic.SwapInt64(&p.requestSlot, 0)
+			errs := atomic.SwapInt64(&p.errorSlot, 0)
+			p.recordErrorSlot(errs, reqs)
 		}
 	}
+}
+
+// recordErrorSlot writes one second's request/error counts into the
+// ring buffer and recomputes the sustained error rate over the window.
+// Mirrors recordDropSlot's pattern so the breaker has a metric shape
+// it can poll without holding the pool's mutex on the hot path.
+func (p *Pool) recordErrorSlot(errs, reqs int64) {
+	p.mu.Lock()
+	// histIdx is shared with the drop ring buffer; it advances in
+	// recordDropSlot which is called immediately before us, so we read
+	// the *just-incremented* index minus one.
+	idx := (p.histIdx + dropWindow - 1) % dropWindow
+	p.requestHist[idx] = reqs
+	p.errorHist[idx] = errs
+
+	var winReqs, winErrs int64
+	for i := 0; i < dropWindow; i++ {
+		winReqs += p.requestHist[i]
+		winErrs += p.errorHist[i]
+	}
+	p.mu.Unlock()
+
+	rate := 0.0
+	if winReqs > 0 {
+		rate = float64(winErrs) / float64(winReqs)
+	}
+	atomic.StoreUint64(&p.errorRateBits, math.Float64bits(rate))
+}
+
+// ErrorRate returns the sustained error rate (errors / total requests)
+// over the last dropWindow seconds. Returns 0 before the first
+// sampling tick fires. The breaker uses this to detect prolonged
+// failure conditions without flapping on single-sample noise.
+func (p *Pool) ErrorRate() float64 {
+	return math.Float64frombits(atomic.LoadUint64(&p.errorRateBits))
+}
+
+// Pause halts request execution without tearing down workers or the
+// connection pool. Workers continue dequeuing jobs from the channel
+// but processJob returns early, leaving the rate limiter and clients
+// untouched. Resume restores normal flow instantly.
+func (p *Pool) Pause() {
+	p.paused.Store(true)
+}
+
+// Resume re-enables request execution after Pause.
+func (p *Pool) Resume() {
+	p.paused.Store(false)
+}
+
+// IsPaused reports whether the pool is currently in the paused state.
+func (p *Pool) IsPaused() bool {
+	return p.paused.Load()
 }
 
 // recordDropSlot writes one second's worth of drop counters into the

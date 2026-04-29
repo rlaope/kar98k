@@ -23,6 +23,7 @@ type Controller struct {
 	checker   *health.Checker
 	metrics   *health.Metrics
 	scenarios *ScenarioRunner
+	breaker   *CircuitBreaker
 
 	// Weighted target selection
 	weightedTargets []config.Target
@@ -70,6 +71,29 @@ func (c *Controller) AttachScenarios(scenarios []config.Scenario, defaultPattern
 		r.SetMetrics(c.metrics)
 	}
 	c.scenarios = r
+}
+
+// AttachSafety opts the controller into circuit-breaker mode. When
+// safety.Enabled is false the call is a no-op and the breaker
+// goroutine never runs.
+func (c *Controller) AttachSafety(safety config.Safety) {
+	if !safety.Enabled {
+		return
+	}
+	c.breaker = NewCircuitBreaker(safety, c.pool, c.metrics)
+}
+
+// ManualResume forwards to the breaker so `kar resume` can clear an
+// open circuit. No-op when safety is disabled or the breaker is
+// already closed.
+func (c *Controller) ManualResume() {
+	c.breaker.ManualResume()
+}
+
+// BreakerOpen reports whether the circuit breaker is currently
+// tripped. Returns (false, zero-time) when safety is disabled.
+func (c *Controller) BreakerOpen() (bool, time.Time) {
+	return c.breaker.State()
 }
 
 // buildWeightedTargets creates a weighted list for random selection.
@@ -129,6 +153,15 @@ func (c *Controller) Start(ctx context.Context) {
 		go func() {
 			defer c.wg.Done()
 			c.scenarios.Run(ctx)
+		}()
+	}
+
+	// Circuit breaker watcher (safety mode only).
+	if c.breaker != nil {
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.breaker.Run(ctx)
 		}()
 	}
 

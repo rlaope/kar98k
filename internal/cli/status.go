@@ -252,7 +252,39 @@ var pauseCmd = &cobra.Command{
 	},
 }
 
+// Resume command — clears an open circuit breaker. Idempotent.
+var resumeCmd = &cobra.Command{
+	Use:   "resume",
+	Short: "Resume traffic after a circuit-breaker trip",
+	Long: `Force-clear an open circuit breaker so traffic resumes immediately.
+
+The circuit breaker (configured under safety.* in the config) auto-pauses
+traffic when error rate or P95 latency stays above thresholds for a sustained
+window. This command lets the operator override the auto-resume timer when
+they're confident the underlying issue is fixed.
+
+Idempotent: a no-op when the breaker is already closed or safety is disabled.`,
+	RunE: func(cmd *cobra.Command, args []string) error {
+		resp, err := daemon.SendCommand(daemon.Command{Type: "resume"})
+		if err != nil {
+			return fmt.Errorf("daemon not running: %w", err)
+		}
+
+		if resp.Success {
+			fmt.Println()
+			fmt.Println(tui.SuccessStyle.Render("  " + tui.TriggerPulled + " Resume signalled"))
+			fmt.Println(tui.DimStyle.Render("  " + resp.Message))
+			fmt.Println()
+		} else {
+			fmt.Println(tui.ErrorStyle.Render("  " + resp.Message))
+		}
+
+		return nil
+	},
+}
+
 func init() {
 	rootCmd.AddCommand(triggerCmd)
 	rootCmd.AddCommand(pauseCmd)
+	rootCmd.AddCommand(resumeCmd)
 }

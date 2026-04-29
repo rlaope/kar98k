@@ -235,6 +235,42 @@ scenarios:
 `kar status` shows the active phase; the line disappears once the
 timeline completes. See `configs/scenarios.yaml` for a fuller example.
 
+### safety
+
+Optional circuit breaker. When error rate or P95 latency stays above
+thresholds for the configured sustained window, the controller pauses
+the pool — workers stay alive, the connection pool stays warm, but no
+new requests fire. Operators clear the breaker with `kar resume`, or
+auto-resume kicks in after `resume_after`.
+
+| Field | Type | Required | Description |
+|-------|------|----------|-------------|
+| `enabled` | bool | No (default false) | Master switch for the breaker |
+| `error_rate_above` | float | One of these required | Trip when sustained 60s error rate exceeds this percentage (0..100) |
+| `p95_latency_above` | duration | One of these required | Trip when current P95 latency exceeds this duration |
+| `sustained_for` | duration | Yes when enabled | Breach must persist this long before tripping (avoids flapping) |
+| `resume_after` | duration | No | Auto-resume timer once metrics recover; `0` disables auto-resume |
+| `webhook` | string | No | Optional URL to POST `{transition, reason, at}` JSON on every state change |
+
+```yaml
+safety:
+  enabled: true
+  error_rate_above: 50      # %
+  p95_latency_above: 5s
+  sustained_for: 30s
+  resume_after: 5m          # 0 disables auto-resume
+  webhook: https://hooks.slack.com/...
+```
+
+Manual control:
+
+```
+kar resume          # force-clear an open circuit, regardless of metrics
+```
+
+The Prometheus gauge `kar98k_circuit_breaker_state` reports `1` while
+the breaker is open and `0` while closed.
+
 #### scenarios.inject
 
 Optional Gatling-style **injection profile** for a phase. When `inject:`

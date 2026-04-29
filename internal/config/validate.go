@@ -60,7 +60,50 @@ func ValidateConfig(cfg *Config) []Issue {
 	out = append(out, validateWorker(cfg)...)
 	out = append(out, validateSchedule(cfg)...)
 	out = append(out, validateScenarios(cfg)...)
+	out = append(out, validateSafety(cfg)...)
 
+	return out
+}
+
+// validateSafety checks the optional circuit-breaker block. When
+// disabled we skip; when enabled at least one threshold must be set
+// and SustainedFor must be positive.
+func validateSafety(cfg *Config) []Issue {
+	s := cfg.Safety
+	if !s.Enabled {
+		return nil
+	}
+	var out []Issue
+	if s.ErrorRateAbove == 0 && s.P95LatencyAbove == 0 {
+		out = append(out, Issue{
+			Path:     "safety",
+			Severity: SeverityError,
+			Message:  "safety.enabled = true but no thresholds set (error_rate_above or p95_latency_above)",
+		})
+	}
+	if s.ErrorRateAbove < 0 || s.ErrorRateAbove > 100 {
+		out = append(out, Issue{
+			Path:     "safety.error_rate_above",
+			Severity: SeverityError,
+			Message:  "error_rate_above must be in [0, 100]",
+		})
+	}
+	if s.SustainedFor <= 0 {
+		out = append(out, Issue{
+			Path:     "safety.sustained_for",
+			Severity: SeverityError,
+			Message:  "sustained_for must be > 0 — single-sample trips cause flapping",
+		})
+	}
+	if s.Webhook != "" {
+		if _, err := url.Parse(s.Webhook); err != nil {
+			out = append(out, Issue{
+				Path:     "safety.webhook",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("webhook URL parse failed: %v", err),
+			})
+		}
+	}
 	return out
 }
 

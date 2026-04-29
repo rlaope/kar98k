@@ -165,6 +165,7 @@ func (d *Daemon) Start() error {
 	d.checker = health.NewChecker(d.cfg.Health, d.cfg.Targets, d.metrics)
 	d.ctrl = controller.NewController(d.cfg.Controller, d.cfg.Targets, d.engine, d.pool, d.checker, d.metrics)
 	d.ctrl.AttachScenarios(d.cfg.Scenarios, d.cfg.Pattern)
+	d.ctrl.AttachSafety(d.cfg.Safety)
 
 	// Start metrics server
 	if d.cfg.Metrics.Enabled {
@@ -336,6 +337,14 @@ func (d *Daemon) handleConnection(conn net.Conn) {
 	case "pause":
 		d.Pause()
 		resp = Response{Success: true, Message: "Traffic paused"}
+
+	case "resume":
+		// Force-clear an open circuit breaker. Idempotent: a no-op
+		// when the breaker is already closed or safety is disabled.
+		if d.ctrl != nil {
+			d.ctrl.ManualResume()
+		}
+		resp = Response{Success: true, Message: "Resume signalled (clears any tripped circuit breaker)"}
 
 	case "stop":
 		resp = Response{Success: true, Message: "Stopping daemon..."}

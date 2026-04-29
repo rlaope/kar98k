@@ -242,6 +242,44 @@ func TestValidateConfig_InjectUnknownTypeIsError(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_SafetyHappyPath(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Safety = Safety{
+		Enabled:         true,
+		ErrorRateAbove:  50,
+		P95LatencyAbove: 2 * time.Second,
+		SustainedFor:    30 * time.Second,
+		ResumeAfter:     5 * time.Minute,
+	}
+	if HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("safety happy path should pass: %+v", ValidateConfig(cfg))
+	}
+}
+
+func TestValidateConfig_SafetyEnabledNoThresholdsIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Safety = Safety{Enabled: true, SustainedFor: 30 * time.Second}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("enabled with no thresholds should error")
+	}
+}
+
+func TestValidateConfig_SafetyZeroSustainedIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Safety = Safety{Enabled: true, ErrorRateAbove: 25}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("zero sustained_for should error")
+	}
+}
+
+func TestValidateConfig_SafetyOutOfRangeErrorRateIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Safety = Safety{Enabled: true, ErrorRateAbove: 150, SustainedFor: 30 * time.Second}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("error_rate_above > 100 should error")
+	}
+}
+
 func TestValidateConfig_HourOutOfRangeIsError(t *testing.T) {
 	cfg := goodConfig()
 	cfg.Controller.Schedule = []ScheduleEntry{{Hours: []int{25}, TPSMultiplier: 1.0}}
