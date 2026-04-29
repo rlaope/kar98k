@@ -68,9 +68,18 @@ type Poisson struct {
 
 // Noise configures micro fluctuations.
 type Noise struct {
-	Enabled   bool    `yaml:"enabled"`
-	Amplitude float64 `yaml:"amplitude"`
+	Enabled   bool      `yaml:"enabled"`
+	Type      NoiseType `yaml:"type,omitempty"` // "spring" (default) or "perlin"
+	Amplitude float64   `yaml:"amplitude"`
 }
+
+// NoiseType selects the noise generator algorithm.
+type NoiseType string
+
+const (
+	NoiseTypeSpring NoiseType = "spring"
+	NoiseTypePerlin NoiseType = "perlin"
+)
 
 // Worker configures the worker pool.
 type Worker struct {

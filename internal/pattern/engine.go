@@ -10,7 +10,7 @@ import (
 // Engine combines all traffic pattern generators.
 type Engine struct {
 	poisson *PoissonSpike
-	noise   *Noise
+	noise   NoiseGenerator
 	baseTPS float64
 	maxTPS  float64
 	mu      sync.RWMutex
@@ -20,7 +20,7 @@ type Engine struct {
 func NewEngine(cfg config.Pattern, baseTPS, maxTPS float64) *Engine {
 	return &Engine{
 		poisson: NewPoissonSpike(cfg.Poisson),
-		noise:   NewNoise(cfg.Noise),
+		noise:   NewNoiseGenerator(cfg.Noise),
 		baseTPS: baseTPS,
 		maxTPS:  maxTPS,
 	}
@@ -130,7 +130,7 @@ func (e *Engine) GetStatus() Status {
 		PoissonEnabled:    e.poisson.cfg.Enabled,
 		PoissonSpiking:    e.poisson.IsSpiking(),
 		PoissonMultiplier: e.poisson.Multiplier(),
-		NoiseEnabled:      e.noise.cfg.Enabled,
+		NoiseEnabled:      e.noise.Enabled(),
 		NoiseMultiplier:   e.noise.Multiplier(),
 	}
 }

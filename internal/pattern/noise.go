@@ -9,16 +9,37 @@ import (
 	"github.com/kar98k/internal/config"
 )
 
-// Noise generates micro fluctuations in traffic rate.
+// NoiseGenerator is implemented by all noise algorithms.
+type NoiseGenerator interface {
+	Multiplier() float64
+	Enabled() bool
+}
+
+// NewNoiseGenerator returns the configured noise generator.
+// Defaults to spring-damper if Type is empty or unknown.
+func NewNoiseGenerator(cfg config.Noise) NoiseGenerator {
+	switch cfg.Type {
+	case config.NoiseTypePerlin:
+		return NewPerlinNoise(cfg)
+	default:
+		return NewNoise(cfg)
+	}
+}
+
+// Noise generates micro fluctuations using a spring-damper system.
 type Noise struct {
 	cfg config.Noise
 	rng *rand.Rand
 	mu  sync.Mutex
 
-	// Smoothing state for Perlin-like noise
 	currentValue float64
 	targetValue  float64
 	velocity     float64
+}
+
+// Enabled reports whether the generator is active.
+func (n *Noise) Enabled() bool {
+	return n.cfg.Enabled
 }
 
 // NewNoise creates a new noise generator.
@@ -90,6 +111,11 @@ func NewPerlinNoise(cfg config.Noise) *PerlinNoise {
 		cfg:       cfg,
 		startTime: time.Now(),
 	}
+}
+
+// Enabled reports whether the generator is active.
+func (p *PerlinNoise) Enabled() bool {
+	return p.cfg.Enabled
 }
 
 // Multiplier returns the current noise multiplier using Perlin noise.

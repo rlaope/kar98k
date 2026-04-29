@@ -137,7 +137,13 @@ Micro fluctuations for realistic traffic.
 | Field | Type | Required | Default | Description |
 |-------|------|----------|---------|-------------|
 | `enabled` | bool | No | `true` | Enable noise |
+| `type` | string | No | `spring` | Algorithm: `spring` (random spring-damper) or `perlin` (smooth multi-octave wave) |
 | `amplitude` | float | No | `0.10` | Fluctuation range (0.10 = ±10%) |
+
+`type=spring` produces small random fluctuations smoothed by a spring-damper system —
+the default and what most users want. `type=perlin` produces a slower wave-like pattern
+that drifts up and down over time, which more closely resembles real-world organic
+traffic. Both stay within `±amplitude` of the base TPS.
 
 ### worker
 

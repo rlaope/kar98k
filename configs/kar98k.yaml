@@ -55,6 +55,7 @@ pattern:
     ramp_down: 10s         # Time to return to baseline
   noise:
     enabled: true
+    # type: spring         # default: spring (random) | perlin (smooth wave)
     amplitude: 0.10        # +/- 10% random fluctuation
 
 worker:
