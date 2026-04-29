@@ -25,22 +25,26 @@ const (
 
 // Status represents the current daemon status
 type Status struct {
-	Running       bool      `json:"running"`
-	Triggered     bool      `json:"triggered"`
-	StartTime     time.Time `json:"start_time"`
-	Uptime        string    `json:"uptime"`
-	CurrentTPS    float64   `json:"current_tps"`
-	TargetTPS     float64   `json:"target_tps"`
-	RequestsSent  int64     `json:"requests_sent"`
-	ErrorCount    int64     `json:"error_count"`
-	AvgLatency    float64   `json:"avg_latency_ms"`
-	IsSpiking     bool      `json:"is_spiking"`
-	SpikeKind     string    `json:"spike_kind"`    // "none" | "auto" | "manual"
-	NextSpikeIn   string    `json:"next_spike_in"` // e.g. "2m13s", or "" while spiking
-	TargetURL     string    `json:"target_url"`
-	Protocol      string    `json:"protocol"`
-	QueueDrops    int64     `json:"queue_drops"`
-	QueueDropRate float64   `json:"queue_drop_rate"`
+	Running             bool      `json:"running"`
+	Triggered           bool      `json:"triggered"`
+	StartTime           time.Time `json:"start_time"`
+	Uptime              string    `json:"uptime"`
+	CurrentTPS          float64   `json:"current_tps"`
+	TargetTPS           float64   `json:"target_tps"`
+	RequestsSent        int64     `json:"requests_sent"`
+	ErrorCount          int64     `json:"error_count"`
+	AvgLatency          float64   `json:"avg_latency_ms"`
+	LatencyP95Raw       float64   `json:"latency_p95_raw_ms"`
+	LatencyP99Raw       float64   `json:"latency_p99_raw_ms"`
+	LatencyP95Corrected float64   `json:"latency_p95_corrected_ms"`
+	LatencyP99Corrected float64   `json:"latency_p99_corrected_ms"`
+	IsSpiking           bool      `json:"is_spiking"`
+	SpikeKind           string    `json:"spike_kind"`    // "none" | "auto" | "manual"
+	NextSpikeIn         string    `json:"next_spike_in"` // e.g. "2m13s", or "" while spiking
+	TargetURL           string    `json:"target_url"`
+	Protocol            string    `json:"protocol"`
+	QueueDrops          int64     `json:"queue_drops"`
+	QueueDropRate       float64   `json:"queue_drop_rate"`
 }
 
 // Command represents a command sent to the daemon
@@ -229,6 +233,10 @@ func (d *Daemon) GetStatus() Status {
 		if !ctrlStatus.PatternStatus.PoissonSpiking && ctrlStatus.PatternStatus.NextSpikeIn > 0 {
 			status.NextSpikeIn = ctrlStatus.PatternStatus.NextSpikeIn.Round(time.Second).String()
 		}
+		status.LatencyP95Raw = ctrlStatus.LatencyP95Raw
+		status.LatencyP99Raw = ctrlStatus.LatencyP99Raw
+		status.LatencyP95Corrected = ctrlStatus.LatencyP95Corrected
+		status.LatencyP99Corrected = ctrlStatus.LatencyP99Corrected
 	}
 
 	return status
