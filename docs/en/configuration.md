@@ -111,6 +111,24 @@ Controls the main traffic generation behavior.
 |-------|------|-------------|
 | `hours` | list[int] | Hours (0-23) when this multiplier applies |
 | `tps_multiplier` | float | Multiplier to apply to base TPS |
+| `priority` | int | Higher value wins when multiple entries cover the same hour (default `0`) |
+
+When two entries cover the same hour, the entry with the higher
+`priority` is selected. Entries with equal priority fall back to "later
+in the list wins" — so a schedule that doesn't set `priority` keeps
+the historical position-based behaviour.
+
+```yaml
+schedule:
+  - hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]
+    tps_multiplier: 1.5
+  - hours: [12, 13]              # lunch peak overrides business hours
+    tps_multiplier: 2.0
+    priority: 10
+```
+
+`kar validate` warns when entries overlap without an explicit
+`priority`, since the silent override often surprises operators.
 
 ### pattern
 

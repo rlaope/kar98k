@@ -43,9 +43,15 @@ type Controller struct {
 }
 
 // ScheduleEntry defines a time-of-day TPS multiplier.
+//
+// When more than one entry covers the same hour, the entry with the
+// highest Priority wins. Ties fall back to "later entry wins" so a
+// schedule that doesn't set Priority preserves the historical
+// position-based override semantics.
 type ScheduleEntry struct {
 	Hours         []int   `yaml:"hours"`
 	TPSMultiplier float64 `yaml:"tps_multiplier"`
+	Priority      int     `yaml:"priority,omitempty"`
 }
 
 // Pattern configures the traffic pattern engine.

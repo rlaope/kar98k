@@ -106,7 +106,7 @@ func TestValidateConfig_UnknownNoiseTypeWarns(t *testing.T) {
 	}
 }
 
-func TestValidateConfig_ScheduleHourOverlapInfo(t *testing.T) {
+func TestValidateConfig_ScheduleHourOverlapWithoutPriorityWarns(t *testing.T) {
 	cfg := goodConfig()
 	cfg.Controller.Schedule = []ScheduleEntry{
 		{Hours: []int{9, 10, 11, 12, 13}, TPSMultiplier: 1.5},
@@ -115,16 +115,42 @@ func TestValidateConfig_ScheduleHourOverlapInfo(t *testing.T) {
 	issues := ValidateConfig(cfg)
 
 	if HasErrors(issues) {
-		t.Fatalf("overlap is info-only, not error: %+v", issues)
+		t.Fatalf("overlap should warn, not error: %+v", issues)
 	}
 	found := false
 	for _, iss := range issues {
-		if iss.Severity == SeverityInfo && strings.Contains(iss.Message, "later wins") {
+		if iss.Severity == SeverityWarning && strings.Contains(iss.Message, "no explicit priority") {
 			found = true
 		}
 	}
 	if !found {
-		t.Fatalf("expected schedule overlap info, got %+v", issues)
+		t.Fatalf("expected schedule overlap warning when priority is unset, got %+v", issues)
+	}
+}
+
+// When at least one overlapping entry sets Priority, the override is
+// intentional and should drop back to info severity.
+func TestValidateConfig_ScheduleHourOverlapWithPriorityIsInfo(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Controller.Schedule = []ScheduleEntry{
+		{Hours: []int{9, 10, 11, 12, 13}, TPSMultiplier: 1.5},
+		{Hours: []int{12, 13}, TPSMultiplier: 2.0, Priority: 10},
+	}
+	issues := ValidateConfig(cfg)
+
+	for _, iss := range issues {
+		if iss.Severity == SeverityWarning && strings.Contains(iss.Message, "no explicit priority") {
+			t.Fatalf("explicit priority should suppress the warning, got %+v", iss)
+		}
+	}
+	found := false
+	for _, iss := range issues {
+		if iss.Severity == SeverityInfo && strings.Contains(iss.Message, "highest priority wins") {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("expected info-level overlap notice, got %+v", issues)
 	}
 }
 

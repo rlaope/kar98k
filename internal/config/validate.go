@@ -274,12 +274,34 @@ func validateSchedule(cfg *Config) []Issue {
 			continue
 		}
 		overlapping[key] = true
-		out = append(out, Issue{
-			Path:     "controller.schedule",
-			Severity: SeverityInfo,
-			Message: fmt.Sprintf("hour %d appears in entries %v; later wins (consider explicit priority — see #48)",
-				h, idxs),
-		})
+
+		// If at least one of the overlapping entries sets a non-default
+		// priority, the operator has expressed intent — surface as info.
+		// If every overlap shares priority 0, the override is implicit
+		// and surprises operators who don't read the scheduler code, so
+		// raise it to a warning that suggests setting Priority.
+		explicit := false
+		for _, idx := range idxs {
+			if cfg.Controller.Schedule[idx].Priority != 0 {
+				explicit = true
+				break
+			}
+		}
+		if explicit {
+			out = append(out, Issue{
+				Path:     "controller.schedule",
+				Severity: SeverityInfo,
+				Message: fmt.Sprintf("hour %d appears in entries %v; highest priority wins",
+					h, idxs),
+			})
+		} else {
+			out = append(out, Issue{
+				Path:     "controller.schedule",
+				Severity:   SeverityWarning,
+				Message:    fmt.Sprintf("hour %d appears in entries %v with no explicit priority — later entry silently wins", h, idxs),
+				Suggestion: "set `priority:` on the entry that should win to make the override explicit",
+			})
+		}
 	}
 	return out
 }

@@ -20,26 +20,15 @@ func NewScheduler(schedule []config.ScheduleEntry) *Scheduler {
 
 // GetMultiplier returns the TPS multiplier for the current hour.
 func (s *Scheduler) GetMultiplier() float64 {
-	if len(s.schedule) == 0 {
-		return 1.0
-	}
-
-	currentHour := time.Now().Hour()
-
-	// Check entries in reverse order so later entries take precedence
-	for i := len(s.schedule) - 1; i >= 0; i-- {
-		entry := s.schedule[i]
-		for _, hour := range entry.Hours {
-			if hour == currentHour {
-				return entry.TPSMultiplier
-			}
-		}
-	}
-
-	return 1.0
+	return s.GetMultiplierForHour(time.Now().Hour())
 }
 
 // GetMultiplierForHour returns the TPS multiplier for a specific hour.
+//
+// Selection rule: among entries whose hours include the target hour,
+// the one with the highest Priority wins. Ties fall back to "later
+// entry wins" — preserving the historical position-based behaviour
+// for schedules that don't set Priority.
 func (s *Scheduler) GetMultiplierForHour(hour int) float64 {
 	if len(s.schedule) == 0 {
 		return 1.0
@@ -48,16 +37,30 @@ func (s *Scheduler) GetMultiplierForHour(hour int) float64 {
 	// Normalize hour to 0-23
 	hour = ((hour % 24) + 24) % 24
 
-	for i := len(s.schedule) - 1; i >= 0; i-- {
+	winnerIdx := -1
+	for i := range s.schedule {
 		entry := s.schedule[i]
+		matches := false
 		for _, h := range entry.Hours {
 			if h == hour {
-				return entry.TPSMultiplier
+				matches = true
+				break
 			}
+		}
+		if !matches {
+			continue
+		}
+		// Higher priority wins; equal priority falls back to "later wins"
+		// because the iteration is left-to-right.
+		if winnerIdx < 0 || entry.Priority >= s.schedule[winnerIdx].Priority {
+			winnerIdx = i
 		}
 	}
 
-	return 1.0
+	if winnerIdx < 0 {
+		return 1.0
+	}
+	return s.schedule[winnerIdx].TPSMultiplier
 }
 
 // GetScheduleInfo returns information about the current schedule.

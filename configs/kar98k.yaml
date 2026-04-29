@@ -37,9 +37,11 @@ controller:
     # Business hours: higher traffic
     - hours: [9, 10, 11, 12, 13, 14, 15, 16, 17]
       tps_multiplier: 1.5
-    # Peak lunch hours
+    # Peak lunch hours — `priority: 10` makes the override explicit so
+    # this entry wins regardless of position in the list.
     - hours: [12, 13]
       tps_multiplier: 2.0
+      priority: 10
     # Night hours: lower traffic
     - hours: [0, 1, 2, 3, 4, 5]
       tps_multiplier: 0.3
