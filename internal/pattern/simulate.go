@@ -18,6 +18,9 @@ type SamplePoint struct {
 	NoiseMult    float64   `json:"noise_mult"`
 	TPS          float64   `json:"tps"`
 	Spiking      bool      `json:"spiking"`
+	// Phase is the scenario phase name this sample belongs to. Empty
+	// string when no scenarios are configured (backward-compatible).
+	Phase string `json:"phase,omitempty"`
 }
 
 type spikeEvent struct {

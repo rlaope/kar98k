@@ -13,6 +13,13 @@ import (
 // "knee" without being indistinguishable from constant_tps.
 const defaultHeavisideSteepness = 6.0
 
+// InjectTPSAt is the exported entry point for external callers (e.g.
+// the simulate CLI) that need to evaluate an injection curve without
+// holding controller-internal state. It delegates to injectTPSAt.
+func InjectTPSAt(steps []config.InjectStep, at time.Duration) float64 {
+	return injectTPSAt(steps, at)
+}
+
 // injectTPSAt returns the effective TPS at offset `at` (relative to
 // the start of the phase) for an injection curve. Steps are walked
 // in order; the first step whose accumulated window contains `at`

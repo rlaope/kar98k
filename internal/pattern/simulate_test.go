@@ -106,3 +106,20 @@ func TestSimulateTimeline_EmptyOnZeroDuration(t *testing.T) {
 		t.Fatalf("len = %d, want 0 for zero duration", len(pts))
 	}
 }
+
+// TestSimulateTimeline_PhaseDefaultsEmpty verifies that points produced
+// by the no-scenarios path have an empty Phase field (backward-compat).
+func TestSimulateTimeline_PhaseDefaultsEmpty(t *testing.T) {
+	cfg := config.Pattern{
+		Poisson: config.Poisson{Enabled: false},
+		Noise:   config.Noise{Enabled: false},
+	}
+	start := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	pts := SimulateTimeline(cfg, 100, 1000, nil, start, time.Hour, 10*time.Minute, 1)
+
+	for _, p := range pts {
+		if p.Phase != "" {
+			t.Fatalf("expected empty Phase for no-scenarios path, got %q at %s", p.Phase, p.Time)
+		}
+	}
+}
