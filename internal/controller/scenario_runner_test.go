@@ -127,6 +127,43 @@ func TestScenarioRunner_StopsOnContextCancel(t *testing.T) {
 	}
 }
 
+// TestScenarioRunner_InjectCurveDrivesEngineTPS confirms that an
+// inject block actually drives the engine's base TPS while a phase
+// runs — i.e. the new injection goroutine wires the evaluator to
+// engine.SetBaseTPS at the documented cadence.
+func TestScenarioRunner_InjectCurveDrivesEngineTPS(t *testing.T) {
+	eng := pattern.NewEngine(config.Pattern{}, 100, 1000)
+	scenarios := []config.Scenario{{
+		Name:     "ramp-up",
+		Duration: 200 * time.Millisecond,
+		Inject: []config.InjectStep{
+			{Type: config.InjectRampTPS, Duration: 200 * time.Millisecond, From: 10, To: 200},
+		},
+	}}
+	runner := NewScenarioRunner(scenarios, eng, 100, 1000, config.Pattern{})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	go runner.Run(ctx)
+
+	// Sample at ~50% of the ramp; the linear interpolator should land
+	// somewhere between From=10 and To=200, well above the inherited
+	// flat default.
+	time.Sleep(110 * time.Millisecond)
+	mid := eng.GetBaseTPS()
+	if mid <= 50 || mid >= 180 {
+		t.Fatalf("midpoint TPS = %v, want roughly halfway between 10 and 200", mid)
+	}
+
+	// Wait for the phase to expire; the injection goroutine should
+	// stop, leaving the engine at whatever the final tick set.
+	time.Sleep(150 * time.Millisecond)
+	final := eng.GetBaseTPS()
+	if final < 150 {
+		t.Fatalf("final TPS = %v, want close to To=200", final)
+	}
+}
+
 // TestScenarioRunner_NoOpWhenEmpty ensures Run is safe to call on a
 // runner with no phases — the controller will hand it an empty list
 // when scenarios mode is disabled.

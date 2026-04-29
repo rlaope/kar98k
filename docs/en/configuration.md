@@ -235,6 +235,41 @@ scenarios:
 `kar status` shows the active phase; the line disappears once the
 timeline completes. See `configs/scenarios.yaml` for a fuller example.
 
+#### scenarios.inject
+
+Optional Gatling-style **injection profile** for a phase. When `inject:`
+is set the phase's `base_tps` is ignored and TPS is driven by the
+injection curve instead. The total of all step durations must equal
+the phase duration — `kar validate` rejects mismatches.
+
+| Step type | Required fields | Description |
+|-----------|----------------|-------------|
+| `nothing_for` | `duration` | TPS stays at the engine floor for the window |
+| `constant_tps` | `duration`, `tps` | Hold a flat TPS for the window |
+| `ramp_tps` | `duration`, `from`, `to` | Linear interpolation between two TPS values |
+| `heaviside_tps` | `duration`, `from`, `to` (optional `steepness`, default `6`) | Sigmoid S-curve between two TPS values |
+
+```yaml
+scenarios:
+  - name: warmup
+    duration: 3m
+    inject:
+      - { type: nothing_for, duration: 30s }
+      - { type: ramp_tps, from: 0, to: 100, duration: 2m }
+      - { type: constant_tps, tps: 100, duration: 30s }
+  - name: spike
+    duration: 1m
+    inject:
+      - { type: heaviside_tps, from: 100, to: 500, duration: 30s, steepness: 8 }
+      - { type: heaviside_tps, from: 500, to: 100, duration: 30s, steepness: 8 }
+```
+
+The runner samples the curve every 100ms and pushes the result onto
+the engine via the same path as the flat-base case, so all the existing
+Pattern overlays (Poisson, noise) still apply on top.
+
+See `configs/scenarios-inject.yaml` for a worked example.
+
 ## Environment Variables
 
 You can use environment variables in the configuration:

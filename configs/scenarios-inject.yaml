@@ -1,0 +1,83 @@
+# Multi-stage scenario with Gatling-style injection profiles.
+#
+# Each phase's `inject:` block describes how TPS evolves *within* the
+# phase. The total of all step durations must equal the phase duration
+# — `kar validate` rejects mismatches.
+#
+# Step types:
+#   nothing_for     idle for `duration`
+#   constant_tps    hold `tps` for `duration`
+#   ramp_tps        linear interpolation from `from` → `to` over `duration`
+#   heaviside_tps   sigmoid S-curve from `from` → `to` over `duration`
+#                   (optional `steepness`, default 6)
+
+targets:
+  - name: example
+    url: http://localhost:8080
+    protocol: http
+    method: GET
+    weight: 1
+    timeout: 5s
+
+controller:
+  base_tps: 50
+  max_tps: 1000
+  ramp_up_duration: 1s
+
+pattern:
+  poisson:
+    enabled: false
+  noise:
+    enabled: false
+
+scenarios:
+  - name: warmup
+    duration: 3m
+    inject:
+      - type: nothing_for
+        duration: 30s
+      - type: ramp_tps
+        from: 0
+        to: 100
+        duration: 2m
+      - type: constant_tps
+        tps: 100
+        duration: 30s
+
+  - name: spike
+    duration: 1m
+    inject:
+      - type: heaviside_tps
+        from: 100
+        to: 500
+        duration: 30s
+        steepness: 8
+      - type: heaviside_tps
+        from: 500
+        to: 100
+        duration: 30s
+        steepness: 8
+
+  - name: cooldown
+    duration: 1m
+    inject:
+      - type: ramp_tps
+        from: 100
+        to: 0
+        duration: 1m
+
+worker:
+  pool_size: 1000
+  queue_size: 10000
+  max_idle_conns: 100
+  idle_conn_timeout: 90s
+
+health:
+  enabled: true
+  interval: 10s
+  timeout: 5s
+
+metrics:
+  enabled: true
+  address: ":9090"
+  path: /metrics

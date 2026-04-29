@@ -109,6 +109,75 @@ func validateScenarios(cfg *Config) []Issue {
 				Message:  fmt.Sprintf("base_tps (%.0f) exceeds max_tps (%.0f)", s.BaseTPS, s.MaxTPS),
 			})
 		}
+
+		out = append(out, validateInject(path, s)...)
+	}
+
+	return out
+}
+
+// validateInject sanity-checks one phase's injection curve. The total
+// duration of all steps must equal the phase duration so users don't
+// silently leave a gap (the runner would otherwise hold the last step's
+// TPS forever, surprising the operator).
+func validateInject(path string, s Scenario) []Issue {
+	if len(s.Inject) == 0 {
+		return nil
+	}
+
+	var out []Issue
+	var total time.Duration
+	for i, step := range s.Inject {
+		stepPath := fmt.Sprintf("%s.inject[%d]", path, i)
+		if step.Duration <= 0 {
+			out = append(out, Issue{
+				Path:     stepPath + ".duration",
+				Severity: SeverityError,
+				Message:  "step duration must be > 0",
+			})
+		}
+		switch step.Type {
+		case InjectNothingFor:
+			// no extra fields required
+		case InjectConstantTPS:
+			if step.TPS < 0 {
+				out = append(out, Issue{
+					Path:     stepPath + ".tps",
+					Severity: SeverityError,
+					Message:  "constant_tps requires tps >= 0",
+				})
+			}
+		case InjectRampTPS, InjectHeavisideTPS:
+			if step.From < 0 || step.To < 0 {
+				out = append(out, Issue{
+					Path:     stepPath,
+					Severity: SeverityError,
+					Message:  fmt.Sprintf("%s requires from/to >= 0", step.Type),
+				})
+			}
+		case "":
+			out = append(out, Issue{
+				Path:     stepPath + ".type",
+				Severity: SeverityError,
+				Message:  "inject step type is required (nothing_for | constant_tps | ramp_tps | heaviside_tps)",
+			})
+		default:
+			out = append(out, Issue{
+				Path:     stepPath + ".type",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("unknown inject step type %q", step.Type),
+			})
+		}
+		total += step.Duration
+	}
+
+	if s.Duration > 0 && total != s.Duration {
+		out = append(out, Issue{
+			Path:     path + ".inject",
+			Severity: SeverityError,
+			Message: fmt.Sprintf("inject steps total %s but phase duration is %s — they must match",
+				total, s.Duration),
+		})
 	}
 
 	return out

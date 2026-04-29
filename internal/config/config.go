@@ -26,12 +26,54 @@ type Config struct {
 // top-level for the first phase). This keeps simple configs short:
 // declaring just a `name + duration + base_tps` is enough to bump TPS
 // for one stage and let everything else flow through.
+//
+// When Inject is non-empty, base_tps is ignored — the inject curve
+// drives the per-tick TPS within this phase. The total of all inject
+// step durations must equal the phase duration.
 type Scenario struct {
 	Name     string        `yaml:"name"`
 	Duration time.Duration `yaml:"duration"`
 	BaseTPS  float64       `yaml:"base_tps,omitempty"`
 	MaxTPS   float64       `yaml:"max_tps,omitempty"`
 	Pattern  *Pattern      `yaml:"pattern,omitempty"`
+	Inject   []InjectStep  `yaml:"inject,omitempty"`
+}
+
+// InjectStepType is the discriminator for the inject DSL. Each value
+// describes how TPS evolves over the step's duration.
+type InjectStepType string
+
+const (
+	// InjectNothingFor holds TPS at the engine floor (1) for Duration.
+	// Equivalent to Gatling's `nothingFor(d)`.
+	InjectNothingFor InjectStepType = "nothing_for"
+	// InjectConstantTPS holds TPS at TPS for Duration.
+	// Equivalent to Gatling's `constantUsersPerSec(n) during d`.
+	InjectConstantTPS InjectStepType = "constant_tps"
+	// InjectRampTPS linearly interpolates TPS from From to To over Duration.
+	// Equivalent to Gatling's `rampUsersPerSec(a) to (b) during d`.
+	InjectRampTPS InjectStepType = "ramp_tps"
+	// InjectHeavisideTPS injects an S-curve from From to To over Duration
+	// using a sigmoid 1/(1+exp(-k(t-t0))). k defaults to 6 (steep but
+	// continuous). Equivalent to Gatling's `heavisideUsers(n) during d`.
+	InjectHeavisideTPS InjectStepType = "heaviside_tps"
+)
+
+// InjectStep is one segment of a phase's injection curve. Field
+// validity depends on Type — see InjectStepType for what each variant
+// reads. The runner enforces field constraints at config-load time so
+// runtime evaluation can stay branch-light.
+type InjectStep struct {
+	Type     InjectStepType `yaml:"type"`
+	Duration time.Duration  `yaml:"duration"`
+	// TPS is the target rate for constant_tps. Ignored otherwise.
+	TPS float64 `yaml:"tps,omitempty"`
+	// From / To are the endpoints for ramp_tps and heaviside_tps.
+	From float64 `yaml:"from,omitempty"`
+	To   float64 `yaml:"to,omitempty"`
+	// Steepness controls how sharp the heaviside_tps sigmoid is. Larger
+	// values approach a true step function. Defaults to 6 when zero.
+	Steepness float64 `yaml:"steepness,omitempty"`
 }
 
 // Target defines a single target endpoint.

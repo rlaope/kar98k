@@ -74,24 +74,64 @@ func (r *ScenarioRunner) Run(ctx context.Context) {
 		return
 	}
 
+	phaseCtx, cancelPhase := context.WithCancel(ctx)
 	r.applyPhase(0)
+	go r.runInjection(phaseCtx, 0)
 	timer := time.NewTimer(r.scenarios[0].Duration)
 	defer timer.Stop()
 
 	for {
 		select {
 		case <-ctx.Done():
+			cancelPhase()
 			r.markStopped()
 			return
 		case <-timer.C:
 			next := r.nextIndex()
 			if next < 0 {
+				cancelPhase()
 				log.Printf("[scenarios] timeline complete — last phase remains active")
 				r.markStopped()
 				return
 			}
+			cancelPhase()
+			phaseCtx, cancelPhase = context.WithCancel(ctx)
 			r.applyPhase(next)
+			go r.runInjection(phaseCtx, next)
 			timer.Reset(r.scenarios[next].Duration)
+		}
+	}
+}
+
+// runInjection tracks a single phase's injection curve. When the phase
+// has no `inject:` block this is a no-op — the engine keeps whatever
+// base TPS applyPhase set. Otherwise the goroutine ticks every 100ms,
+// sampling injectTPSAt against the elapsed time and pushing the result
+// onto the engine via SetBaseTPS.
+//
+// The cadence is hard-coded at 100ms because the controlLoop also
+// runs at 100ms — going finer just spends CPU re-sampling between
+// updates that nobody reads. The phaseCtx is cancelled by Run when
+// the phase ends, which terminates this goroutine cleanly.
+func (r *ScenarioRunner) runInjection(phaseCtx context.Context, idx int) {
+	if idx < 0 || idx >= len(r.scenarios) {
+		return
+	}
+	steps := r.scenarios[idx].Inject
+	if len(steps) == 0 {
+		return
+	}
+	start := time.Now()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-phaseCtx.Done():
+			return
+		case <-ticker.C:
+			tps := injectTPSAt(steps, time.Since(start))
+			r.engine.SetBaseTPS(tps)
 		}
 	}
 }

@@ -201,6 +201,47 @@ func TestValidateConfig_ScenarioBaseAboveMaxIsError(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_InjectStepsHappyPath(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{{
+		Name:     "ramp",
+		Duration: 90 * time.Second,
+		Inject: []InjectStep{
+			{Type: InjectNothingFor, Duration: 30 * time.Second},
+			{Type: InjectRampTPS, Duration: time.Minute, From: 0, To: 100},
+		},
+	}}
+	if HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("expected no errors, got %+v", ValidateConfig(cfg))
+	}
+}
+
+func TestValidateConfig_InjectDurationMismatchIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{{
+		Name:     "mismatch",
+		Duration: time.Minute,
+		Inject: []InjectStep{
+			{Type: InjectConstantTPS, Duration: 30 * time.Second, TPS: 50},
+		},
+	}}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("inject duration mismatch should error")
+	}
+}
+
+func TestValidateConfig_InjectUnknownTypeIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{{
+		Name:     "unknown",
+		Duration: 10 * time.Second,
+		Inject:   []InjectStep{{Type: "bogus", Duration: 10 * time.Second}},
+	}}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("unknown inject type should error")
+	}
+}
+
 func TestValidateConfig_HourOutOfRangeIsError(t *testing.T) {
 	cfg := goodConfig()
 	cfg.Controller.Schedule = []ScheduleEntry{{Hours: []int{25}, TPSMultiplier: 1.0}}
