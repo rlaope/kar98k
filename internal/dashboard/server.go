@@ -49,7 +49,28 @@ type Server struct {
 	preset    string
 	running   bool
 	onTrigger TriggerCallback
+
+	// forecastSrc, when set, powers /api/forecast. Daemon mode wires
+	// this to a closure over controller.ForecastTimeline; script mode
+	// leaves it nil so the endpoint returns 501.
+	forecastSrc ForecastSource
 }
+
+// ForecastPoint is one sample on the dashboard forecast curve. Kept
+// structurally compatible with pattern.SamplePoint so the daemon can
+// pass either form through; the JSON encoding is what UI clients
+// see.
+type ForecastPoint struct {
+	Time    time.Time `json:"time"`
+	TPS     float64   `json:"tps"`
+	Spiking bool      `json:"spiking,omitempty"`
+	Phase   string    `json:"phase,omitempty"`
+}
+
+// ForecastSource produces the current forecast timeline. Server calls
+// it lazily on each /api/forecast request so callers can return
+// up-to-date results when config reloads.
+type ForecastSource func() []ForecastPoint
 
 // New creates a new dashboard server.
 func New(addr string) *Server {
@@ -72,6 +93,12 @@ func (s *Server) SetTriggerCallback(cb TriggerCallback) {
 	s.onTrigger = cb
 }
 
+// SetForecastSource wires the optional /api/forecast endpoint. Pass
+// nil to disable the endpoint (server returns 501).
+func (s *Server) SetForecastSource(src ForecastSource) {
+	s.forecastSrc = src
+}
+
 // SetRunning updates the running state.
 func (s *Server) SetRunning(running bool) {
 	s.mu.Lock()
@@ -89,6 +116,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/start", s.handleStart)
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/state", s.handleState)
+	mux.HandleFunc("/api/forecast", s.handleForecast)
 
 	server := &http.Server{
 		Addr:    s.addr,
@@ -231,6 +259,19 @@ func (s *Server) handleStop(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Content-Type", "application/json")
 	w.Write([]byte(`{"status":"stopped"}`))
+}
+
+// handleForecast returns the forecast timeline as JSON. Returns 501
+// when no source is wired (e.g. script-mode dashboard, which has no
+// pattern engine).
+func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
+	if s.forecastSrc == nil {
+		http.Error(w, "forecast not configured", http.StatusNotImplemented)
+		return
+	}
+	points := s.forecastSrc()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(points)
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {

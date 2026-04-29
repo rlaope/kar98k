@@ -110,109 +110,13 @@ func scenariosTotalDuration(scenarios []config.Scenario) time.Duration {
 	return total
 }
 
-// simulateScenarios walks the scenario list and returns a timeline that
-// reflects each phase's inject curve (or base_tps) with Poisson and
-// noise overlays applied on top. It does not call time.Now().
+// simulateScenarios is a thin wrapper around the shared
+// controller.ForecastTimeline so kar simulate and the daemon
+// dashboard's /api/forecast endpoint can never disagree about the
+// curve. The CLI also emits a stderr warning when --duration is set
+// alongside scenarios; that lives in runSimulate, not here.
 func simulateScenarios(cfg *config.Config, sched *controller.Scheduler, start time.Time) []pattern.SamplePoint {
-	// Compute total scenario duration and warn if --duration disagrees.
-	var totalDuration time.Duration
-	for _, sc := range cfg.Scenarios {
-		totalDuration += sc.Duration
-	}
-	if cmd := simulateDuration; cmd != 24*time.Hour {
-		// User explicitly set --duration; warn if it differs from scenario total.
-		if cmd != totalDuration {
-			fmt.Fprintf(os.Stderr, "warning: --duration %s ignored when scenarios are present; using scenario total %s\n",
-				cmd, totalDuration)
-		}
-	}
-
-	// Pre-generate Poisson spike events for the full window so that
-	// spike timing is coherent across phase boundaries.
-	patCfg := cfg.Pattern
-	seed := simulateSeed
-	if seed == 0 {
-		seed = start.UnixNano()
-	}
-
-	// We call SimulateTimeline per phase with a flat baseTPS equal to
-	// the inject value at each sample, then override TPS in the returned
-	// points. Simpler: build points directly mirroring SimulateTimeline's
-	// inner loop, calling InjectTPSAt for the TPS base.
-
-	var out []pattern.SamplePoint
-	cursor := start
-
-	for _, sc := range cfg.Scenarios {
-		// Resolve effective pattern for this phase.
-		phasePat := patCfg
-		if sc.Pattern != nil {
-			phasePat = *sc.Pattern
-		}
-
-		// Resolve base and max TPS for this phase.
-		phaseBaseTPS := cfg.Controller.BaseTPS
-		if sc.BaseTPS > 0 {
-			phaseBaseTPS = sc.BaseTPS
-		}
-		phaseMaxTPS := cfg.Controller.MaxTPS
-		if sc.MaxTPS > 0 {
-			phaseMaxTPS = sc.MaxTPS
-		}
-
-		phaseEnd := cursor.Add(sc.Duration)
-
-		// Generate Poisson events for this phase window only (same math
-		// as SimulateTimeline uses).
-		phasePts := pattern.SimulateTimeline(
-			phasePat,
-			phaseBaseTPS,
-			phaseMaxTPS,
-			sched.GetMultiplierForHour,
-			cursor,
-			sc.Duration,
-			simulateResolution,
-			seed,
-		)
-
-		for i, p := range phasePts {
-			p.Phase = sc.Name
-
-			if len(sc.Inject) > 0 {
-				// Inject curve drives TPS; Poisson and schedule overlays
-				// are still applied on top.
-				localOffset := p.Time.Sub(cursor)
-				injectBase := controller.InjectTPSAt(sc.Inject, localOffset)
-
-				// Apply schedule and Poisson multipliers from the already-
-				// computed point (SimulateTimeline already set them).
-				tps := injectBase * p.ScheduleMult * p.PoissonMult
-				if phaseMaxTPS > 0 && tps > phaseMaxTPS {
-					tps = phaseMaxTPS
-				}
-				if tps < 1 {
-					tps = 1
-				}
-				p.TPS = tps
-			}
-
-			// Skip the last point of each phase (it equals the first
-			// point of the next phase) except for the final phase.
-			isLastPhase := sc.Name == cfg.Scenarios[len(cfg.Scenarios)-1].Name
-			isLastPoint := i == len(phasePts)-1
-			if isLastPoint && !isLastPhase && p.Time.Equal(phaseEnd) {
-				continue
-			}
-
-			out = append(out, p)
-		}
-
-		cursor = phaseEnd
-		// Vary seed per phase so Poisson events differ between phases.
-		seed++
-	}
-
-	return out
+	return controller.ForecastTimeline(cfg, sched, start, simulateDuration, simulateResolution, simulateSeed)
 }
 
 func printSimulateText(cfg *config.Config, pts []pattern.SamplePoint) {

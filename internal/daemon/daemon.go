@@ -12,6 +12,7 @@ import (
 
 	"github.com/kar98k/internal/config"
 	"github.com/kar98k/internal/controller"
+	"github.com/kar98k/internal/dashboard"
 	"github.com/kar98k/internal/health"
 	"github.com/kar98k/internal/pattern"
 	"github.com/kar98k/internal/worker"
@@ -77,6 +78,7 @@ type Daemon struct {
 	metrics    *health.Metrics
 	engine     *pattern.Engine
 	metricsServer *health.Server
+	dashboard  *dashboard.Server
 
 	status     Status
 	mu         sync.RWMutex
@@ -166,6 +168,20 @@ func (d *Daemon) Start() error {
 	d.ctrl = controller.NewController(d.cfg.Controller, d.cfg.Targets, d.engine, d.pool, d.checker, d.metrics)
 	d.ctrl.AttachScenarios(d.cfg.Scenarios, d.cfg.Pattern)
 	d.ctrl.AttachSafety(d.cfg.Safety)
+
+	// Optional web dashboard for daemon mode (#58 foundation). Wires
+	// /api/forecast to controller.ForecastTimeline so the dashboard
+	// shows the same curve `kar simulate` would produce. The HTML
+	// panel that consumes this endpoint lands in a follow-up issue.
+	if d.cfg.Dashboard.Enabled {
+		addr := d.cfg.Dashboard.Address
+		if addr == "" {
+			addr = ":7000"
+		}
+		d.dashboard = dashboard.New(addr)
+		d.dashboard.SetForecastSource(d.buildForecast)
+		d.dashboard.Start()
+	}
 
 	// Start metrics server
 	if d.cfg.Metrics.Enabled {
@@ -371,6 +387,58 @@ func (d *Daemon) log(format string, args ...interface{}) {
 	}
 }
 
+// buildForecast is the ForecastSource the dashboard calls on every
+// /api/forecast request. It walks the next 24h of the loaded config
+// at 5-minute resolution starting from the top of the current hour
+// — same parameters `kar simulate` defaults to so the two surfaces
+// agree on the curve.
+//
+// Lazy on purpose: the closure captures *d.cfg, so config reloads
+// (when supported) flow through without restarting the dashboard.
+func (d *Daemon) buildForecast() []dashboard.ForecastPoint {
+	sched := controller.NewScheduler(d.cfg.Controller.Schedule)
+	start := time.Now().Truncate(time.Hour)
+	pts := controller.ForecastTimeline(d.cfg, sched, start, 24*time.Hour, 5*time.Minute, 0)
+	out := make([]dashboard.ForecastPoint, 0, len(pts))
+	for _, p := range pts {
+		out = append(out, dashboard.ForecastPoint{
+			Time:    p.Time,
+			TPS:     p.TPS,
+			Spiking: p.Spiking,
+			Phase:   p.Phase,
+		})
+	}
+	return out
+}
+
+// pushDashboard ships the daemon's current Status to the dashboard
+// server (when running). Translation is shallow — we map the daemon
+// surface fields onto dashboard.Stats and let the existing UI render.
+func (d *Daemon) pushDashboard() {
+	if d.dashboard == nil {
+		return
+	}
+	st := d.GetStatus()
+	d.dashboard.Push(dashboard.Stats{
+		Timestamp:   time.Now().Unix(),
+		RPS:         st.CurrentTPS,
+		TotalReqs:   st.RequestsSent,
+		TotalErrors: st.ErrorCount,
+		AvgLatency:  st.AvgLatency,
+		P95Latency:  st.LatencyP95Raw,
+		P99Latency:  st.LatencyP99Raw,
+		ErrorRate:   safeErrorRate(st.RequestsSent, st.ErrorCount),
+		Elapsed:     time.Since(st.StartTime).Seconds(),
+	})
+}
+
+func safeErrorRate(reqs, errs int64) float64 {
+	if reqs <= 0 {
+		return 0
+	}
+	return float64(errs) / float64(reqs) * 100
+}
+
 // monitorEvents monitors and logs traffic events
 func (d *Daemon) monitorEvents() {
 	ticker := time.NewTicker(time.Second)
@@ -398,6 +466,10 @@ func (d *Daemon) monitorEvents() {
 			status := d.ctrl.GetStatus()
 			currentTPS := status.PatternStatus.CurrentTPS
 			isSpiking := status.PatternStatus.PoissonSpiking
+
+			// Mirror current daemon Status onto the dashboard, when one
+			// is configured. Cheap (returns immediately when disabled).
+			d.pushDashboard()
 
 			// Track peak TPS
 			if currentTPS > peakTPS {

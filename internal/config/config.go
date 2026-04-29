@@ -11,6 +11,7 @@ type Config struct {
 	Health     Health     `yaml:"health"`
 	Metrics    Metrics    `yaml:"metrics"`
 	Safety     Safety     `yaml:"safety,omitempty"`
+	Dashboard  Dashboard  `yaml:"dashboard,omitempty"`
 	// Scenarios optionally defines a sequence of phases (warmup,
 	// baseline, spike-train, soak, cooldown, etc.) that the controller
 	// advances through on a wall-clock timeline. When empty, the
@@ -186,6 +187,15 @@ type Safety struct {
 	SustainedFor    time.Duration `yaml:"sustained_for"`               // window the breach must hold for
 	ResumeAfter     time.Duration `yaml:"resume_after,omitempty"`      // 0 disables auto-resume
 	Webhook         string        `yaml:"webhook,omitempty"`           // optional URL pinged on transitions
+}
+
+// Dashboard configures the daemon's optional web dashboard. The
+// dashboard surfaces real-time daemon Status (TPS, latency, queue
+// drops, scenarios, breaker state) and a 24h forecast view derived
+// from the same scenario+inject engine kar simulate uses.
+type Dashboard struct {
+	Enabled bool   `yaml:"enabled"`
+	Address string `yaml:"address,omitempty"` // e.g. ":7000"; defaults to ":7000" when empty
 }
 
 // Discovery configures the adaptive load discovery feature.
