@@ -79,7 +79,7 @@ func NewController(cfg config.Discovery, metrics *health.Metrics) *Controller {
 	return &Controller{
 		cfg:      cfg,
 		metrics:  metrics,
-		analyzer: NewAnalyzer(5 * time.Second), // 5 second sliding window
+		analyzer: NewAnalyzer(),
 		client:   client,
 		state:    StateIdle,
 		lowTPS:   cfg.MinTPS,
