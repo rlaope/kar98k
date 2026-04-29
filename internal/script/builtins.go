@@ -24,6 +24,20 @@ type CheckResult struct {
 	Failed int64
 }
 
+// TimeBucket aggregates one minute of request data so the HTML report
+// can render time-axis visualisations (heatmap + status-code stacked
+// area) without retaining every sample.
+type TimeBucket struct {
+	StartTime   time.Time
+	Histogram   *hdrhistogram.Histogram
+	StatusCodes map[int]int64
+}
+
+// timeBucketResolution is the wall-clock width of each TimeBucket. One
+// minute keeps the bucket count tractable for 24h runs (1440 buckets)
+// while still showing intra-run trends in the heatmap.
+const timeBucketResolution = time.Minute
+
 // Metrics tracks request metrics during script execution.
 type Metrics struct {
 	mu            sync.Mutex
@@ -33,6 +47,8 @@ type Metrics struct {
 	StatusCodes   map[int]int64
 	Checks        []CheckResult
 	checkMap      map[string]int
+	StartTime     time.Time
+	TimeBuckets   []*TimeBucket
 }
 
 func newMetrics() *Metrics {
@@ -41,7 +57,27 @@ func newMetrics() *Metrics {
 		Histogram:   hdrhistogram.New(1, 60000000, 3),
 		StatusCodes: make(map[int]int64),
 		checkMap:    make(map[string]int),
+		StartTime:   time.Now(),
 	}
+}
+
+// bucketFor returns the TimeBucket that should hold a sample observed
+// at `at`, growing the slice with empty placeholders for any minutes
+// without traffic. Caller must hold m.mu.
+func (m *Metrics) bucketFor(at time.Time) *TimeBucket {
+	idx := int(at.Sub(m.StartTime) / timeBucketResolution)
+	if idx < 0 {
+		idx = 0
+	}
+	for len(m.TimeBuckets) <= idx {
+		bStart := m.StartTime.Add(time.Duration(len(m.TimeBuckets)) * timeBucketResolution)
+		m.TimeBuckets = append(m.TimeBuckets, &TimeBucket{
+			StartTime:   bStart,
+			Histogram:   hdrhistogram.New(1, 60000000, 3),
+			StatusCodes: make(map[int]int64),
+		})
+	}
+	return m.TimeBuckets[idx]
 }
 
 func (m *Metrics) recordRequest(status int, duration time.Duration, err error) {
@@ -53,8 +89,13 @@ func (m *Metrics) recordRequest(status int, duration time.Duration, err error) {
 		atomic.AddInt64(&m.TotalErrors, 1)
 	}
 
-	m.Histogram.RecordValue(duration.Microseconds())
+	micros := duration.Microseconds()
+	m.Histogram.RecordValue(micros)
 	m.StatusCodes[status]++
+
+	bucket := m.bucketFor(time.Now())
+	bucket.Histogram.RecordValue(micros)
+	bucket.StatusCodes[status]++
 }
 
 func (m *Metrics) recordCheck(name string, passed bool) {
