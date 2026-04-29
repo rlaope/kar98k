@@ -139,8 +139,15 @@ func printStatus(status daemon.Status) {
 		tpsBar,
 	))
 
-	if status.IsSpiking {
-		content.WriteString(tui.WarningStyle.Render("  ⚡ SPIKE ACTIVE\n"))
+	switch {
+	case status.IsSpiking && status.SpikeKind == "manual":
+		content.WriteString(tui.WarningStyle.Render("  ⚡ SPIKE ACTIVE (manual)\n"))
+	case status.IsSpiking:
+		content.WriteString(tui.WarningStyle.Render("  ⚡ SPIKE ACTIVE (auto)\n"))
+	case status.NextSpikeIn != "":
+		content.WriteString(fmt.Sprintf("  Next spike in: %s %s\n",
+			tui.ValueStyle.Render(status.NextSpikeIn),
+			tui.DimStyle.Render("(auto)")))
 	}
 	content.WriteString("\n")
 
