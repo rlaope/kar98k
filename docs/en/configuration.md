@@ -194,6 +194,47 @@ Prometheus metrics configuration.
 | `address` | string | No | `:9090` | Listen address |
 | `path` | string | No | `/metrics` | Metrics endpoint path |
 
+### scenarios
+
+Optional sequence of phases for multi-stage runs (warmup → baseline →
+spike-train → soak → cooldown, etc.). Each phase advances on a
+wall-clock timeline in declaration order. When `scenarios:` is empty
+or omitted, the controller uses the single top-level `pattern:` block
+as before — full backward compatibility.
+
+| Field | Type | Required | Default | Description |
+|-------|------|----------|---------|-------------|
+| `name` | string | Yes | — | Phase label (must be unique) |
+| `duration` | duration | Yes | — | How long this phase runs |
+| `base_tps` | float | No | inherits | Override base TPS for this phase |
+| `max_tps` | float | No | inherits | Override TPS cap for this phase |
+| `pattern` | object | No | inherits | Override the Poisson/noise block for this phase |
+
+Inheritance rule: any field a phase omits inherits from the top-level
+config. After the final phase elapses, the engine keeps the last
+applied settings until the controller is shut down.
+
+```yaml
+scenarios:
+  - name: warmup
+    duration: 2m
+    base_tps: 20
+  - name: spike-train
+    duration: 15m
+    base_tps: 100
+    max_tps: 600
+    pattern:
+      poisson: { enabled: true, lambda: 0.05, spike_factor: 4.0,
+                 min_interval: 30s, max_interval: 2m,
+                 ramp_up: 3s, ramp_down: 8s }
+  - name: cooldown
+    duration: 5m
+    base_tps: 10
+```
+
+`kar status` shows the active phase; the line disappears once the
+timeline completes. See `configs/scenarios.yaml` for a fuller example.
+
 ## Environment Variables
 
 You can use environment variables in the configuration:

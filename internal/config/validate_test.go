@@ -154,6 +154,53 @@ func TestValidateConfig_ScheduleHourOverlapWithPriorityIsInfo(t *testing.T) {
 	}
 }
 
+func TestValidateConfig_ScenariosHappyPath(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{
+		{Name: "warmup", Duration: 2 * time.Minute, BaseTPS: 20},
+		{Name: "soak", Duration: time.Hour, BaseTPS: 100, MaxTPS: 500},
+	}
+	if HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("expected no errors for valid scenarios, got %+v", ValidateConfig(cfg))
+	}
+}
+
+func TestValidateConfig_ScenarioMissingNameIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{{Duration: time.Minute}}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("missing name should be an error")
+	}
+}
+
+func TestValidateConfig_ScenarioDuplicateNameIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{
+		{Name: "phase", Duration: time.Minute},
+		{Name: "phase", Duration: time.Minute},
+	}
+	issues := ValidateConfig(cfg)
+	if !HasErrors(issues) {
+		t.Fatalf("duplicate scenario name should be an error: %+v", issues)
+	}
+}
+
+func TestValidateConfig_ScenarioZeroDurationIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{{Name: "instant", Duration: 0}}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("zero duration should be an error")
+	}
+}
+
+func TestValidateConfig_ScenarioBaseAboveMaxIsError(t *testing.T) {
+	cfg := goodConfig()
+	cfg.Scenarios = []Scenario{{Name: "bad", Duration: time.Minute, BaseTPS: 200, MaxTPS: 100}}
+	if !HasErrors(ValidateConfig(cfg)) {
+		t.Fatalf("base_tps > max_tps should be an error")
+	}
+}
+
 func TestValidateConfig_HourOutOfRangeIsError(t *testing.T) {
 	cfg := goodConfig()
 	cfg.Controller.Schedule = []ScheduleEntry{{Hours: []int{25}, TPSMultiplier: 1.0}}

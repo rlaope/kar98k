@@ -71,6 +71,19 @@ func (e *Engine) SetMaxTPS(tps float64) {
 	e.mu.Unlock()
 }
 
+// ReplacePattern hot-swaps the Poisson and noise generators while the
+// engine keeps running. Used by the scenario runner so multi-stage
+// scripts (warmup → baseline → spike-train → cooldown) can reshape
+// the traffic curve without tearing down the engine.
+func (e *Engine) ReplacePattern(cfg config.Pattern) {
+	poisson := NewPoissonSpike(cfg.Poisson)
+	noise := NewNoiseGenerator(cfg.Noise)
+	e.mu.Lock()
+	e.poisson = poisson
+	e.noise = noise
+	e.mu.Unlock()
+}
+
 // GetBaseTPS returns the current base TPS.
 func (e *Engine) GetBaseTPS() float64 {
 	e.mu.RLock()

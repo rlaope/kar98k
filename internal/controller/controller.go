@@ -22,6 +22,7 @@ type Controller struct {
 	pool      *worker.Pool
 	checker   *health.Checker
 	metrics   *health.Metrics
+	scenarios *ScenarioRunner
 
 	// Weighted target selection
 	weightedTargets []config.Target
@@ -55,6 +56,16 @@ func NewController(
 
 	c.buildWeightedTargets()
 	return c
+}
+
+// AttachScenarios opts the controller into multi-phase mode. Pass an
+// empty/nil slice to keep the existing single-pattern behaviour. The
+// runner starts when Controller.Start is called.
+func (c *Controller) AttachScenarios(scenarios []config.Scenario, defaultPattern config.Pattern) {
+	if len(scenarios) == 0 {
+		return
+	}
+	c.scenarios = NewScenarioRunner(scenarios, c.engine, c.cfg.BaseTPS, c.cfg.MaxTPS, defaultPattern)
 }
 
 // buildWeightedTargets creates a weighted list for random selection.
@@ -107,6 +118,15 @@ func (c *Controller) Start(ctx context.Context) {
 	// Request generation loop
 	c.wg.Add(1)
 	go c.generateLoop(ctx)
+
+	// Scenario timeline (multi-phase runs only).
+	if c.scenarios != nil {
+		c.wg.Add(1)
+		go func() {
+			defer c.wg.Done()
+			c.scenarios.Run(ctx)
+		}()
+	}
 
 	log.Printf("[controller] started with base TPS %.0f, max TPS %.0f", c.cfg.BaseTPS, c.cfg.MaxTPS)
 }
@@ -258,6 +278,10 @@ type Status struct {
 	LatencyP95Corrected float64
 	LatencyP99Corrected float64
 	PatternStatus       pattern.Status
+	// Scenario describes the active phase when scenarios mode is on.
+	// Total == 0 means scenarios mode is disabled and the single
+	// top-level pattern is in effect.
+	Scenario ScenarioStatus
 }
 
 // GetStatus returns the current status.
@@ -278,5 +302,6 @@ func (c *Controller) GetStatus() Status {
 		LatencyP95Corrected: c.pool.LatencyPercentile(95, true),
 		LatencyP99Corrected: c.pool.LatencyPercentile(99, true),
 		PatternStatus:       c.engine.GetStatus(),
+		Scenario:            c.scenarios.Status(),
 	}
 }

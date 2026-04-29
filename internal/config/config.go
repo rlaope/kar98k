@@ -10,6 +10,28 @@ type Config struct {
 	Worker     Worker     `yaml:"worker"`
 	Health     Health     `yaml:"health"`
 	Metrics    Metrics    `yaml:"metrics"`
+	// Scenarios optionally defines a sequence of phases (warmup,
+	// baseline, spike-train, soak, cooldown, etc.) that the controller
+	// advances through on a wall-clock timeline. When empty, the
+	// controller uses the single Pattern block above as before.
+	Scenarios []Scenario `yaml:"scenarios,omitempty"`
+}
+
+// Scenario is one phase of a multi-stage run. Phases execute strictly
+// in declaration order and each phase's duration is consumed before the
+// next phase starts.
+//
+// All Pattern/TPS fields override the top-level config when non-zero;
+// any zero-valued field inherits from the previous phase (or the
+// top-level for the first phase). This keeps simple configs short:
+// declaring just a `name + duration + base_tps` is enough to bump TPS
+// for one stage and let everything else flow through.
+type Scenario struct {
+	Name     string        `yaml:"name"`
+	Duration time.Duration `yaml:"duration"`
+	BaseTPS  float64       `yaml:"base_tps,omitempty"`
+	MaxTPS   float64       `yaml:"max_tps,omitempty"`
+	Pattern  *Pattern      `yaml:"pattern,omitempty"`
 }
 
 // Target defines a single target endpoint.

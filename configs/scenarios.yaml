@@ -1,0 +1,93 @@
+# Multi-stage scenario example.
+#
+# Each phase advances on a wall-clock timeline in the order declared.
+# A phase that omits base_tps / max_tps / pattern inherits the value
+# from the top-level config below — useful for "only this stage is
+# different" runs.
+#
+# Run with:  kar start --config configs/scenarios.yaml
+#            kar trigger
+#            kar status -w     # watch the Phase line advance
+
+targets:
+  - name: example
+    url: http://localhost:8080
+    protocol: http
+    method: GET
+    weight: 1
+    timeout: 5s
+
+controller:
+  base_tps: 50
+  max_tps: 1000
+  ramp_up_duration: 5s
+
+# Top-level pattern is the inheritance fallback for any phase that does
+# not specify its own `pattern:` block.
+pattern:
+  poisson:
+    enabled: false
+  noise:
+    enabled: false
+
+scenarios:
+  - name: warmup
+    duration: 2m
+    base_tps: 20
+    # noise/poisson off (inherited from top-level)
+
+  - name: baseline
+    duration: 30m
+    base_tps: 100
+    pattern:
+      poisson:
+        enabled: false
+      noise:
+        enabled: true
+        amplitude: 0.05
+
+  - name: spike-train
+    duration: 15m
+    base_tps: 100
+    max_tps: 600
+    pattern:
+      poisson:
+        enabled: true
+        lambda: 0.05          # ~1 spike every 20s
+        spike_factor: 4.0
+        min_interval: 30s
+        max_interval: 2m
+        ramp_up: 3s
+        ramp_down: 8s
+      noise:
+        enabled: false
+
+  - name: soak
+    duration: 2h
+    base_tps: 80
+    pattern:
+      poisson:
+        enabled: false
+      noise:
+        enabled: true
+        amplitude: 0.1
+
+  - name: cooldown
+    duration: 5m
+    base_tps: 10
+
+worker:
+  pool_size: 1000
+  queue_size: 10000
+  max_idle_conns: 100
+  idle_conn_timeout: 90s
+
+health:
+  enabled: true
+  interval: 10s
+  timeout: 5s
+
+metrics:
+  enabled: true
+  address: ":9090"
+  path: /metrics

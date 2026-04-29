@@ -149,6 +149,19 @@ func printStatus(status daemon.Status) {
 			tui.ValueStyle.Render(status.NextSpikeIn),
 			tui.DimStyle.Render("(auto)")))
 	}
+
+	if status.ScenarioTotal > 0 {
+		marker := ""
+		if status.ScenarioDone {
+			marker = " " + tui.DimStyle.Render("(timeline complete)")
+		}
+		content.WriteString(fmt.Sprintf("  Phase %s: %s %s%s\n",
+			tui.ValueStyle.Render(fmt.Sprintf("%d/%d", status.ScenarioIndex, status.ScenarioTotal)),
+			tui.LabelStyle.Render(status.ScenarioName),
+			tui.DimStyle.Render(fmt.Sprintf("(%s/%s)", status.ScenarioElapsed, status.ScenarioDuration)),
+			marker,
+		))
+	}
 	content.WriteString("\n")
 
 	// Metrics

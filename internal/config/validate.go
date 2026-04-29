@@ -59,6 +59,57 @@ func ValidateConfig(cfg *Config) []Issue {
 	out = append(out, validatePattern(cfg)...)
 	out = append(out, validateWorker(cfg)...)
 	out = append(out, validateSchedule(cfg)...)
+	out = append(out, validateScenarios(cfg)...)
+
+	return out
+}
+
+// validateScenarios checks the optional `scenarios:` array. Each phase
+// must have a name, a positive duration, and (if set) sane TPS bounds.
+// Names must be unique so dashboards / metrics can label phases without
+// ambiguity.
+func validateScenarios(cfg *Config) []Issue {
+	if len(cfg.Scenarios) == 0 {
+		return nil
+	}
+
+	var out []Issue
+	seen := make(map[string]bool)
+	for i, s := range cfg.Scenarios {
+		path := fmt.Sprintf("scenarios[%d]", i)
+
+		if s.Name == "" {
+			out = append(out, Issue{
+				Path:     path + ".name",
+				Severity: SeverityError,
+				Message:  "scenario name is required",
+			})
+		} else if seen[s.Name] {
+			out = append(out, Issue{
+				Path:     path + ".name",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("duplicate scenario name %q — names must be unique", s.Name),
+			})
+		} else {
+			seen[s.Name] = true
+		}
+
+		if s.Duration <= 0 {
+			out = append(out, Issue{
+				Path:     path + ".duration",
+				Severity: SeverityError,
+				Message:  "duration must be > 0",
+			})
+		}
+
+		if s.MaxTPS > 0 && s.BaseTPS > s.MaxTPS {
+			out = append(out, Issue{
+				Path:     path + ".max_tps",
+				Severity: SeverityError,
+				Message:  fmt.Sprintf("base_tps (%.0f) exceeds max_tps (%.0f)", s.BaseTPS, s.MaxTPS),
+			})
+		}
+	}
 
 	return out
 }

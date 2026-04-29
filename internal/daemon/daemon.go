@@ -45,6 +45,14 @@ type Status struct {
 	Protocol            string    `json:"protocol"`
 	QueueDrops          int64     `json:"queue_drops"`
 	QueueDropRate       float64   `json:"queue_drop_rate"`
+	// Scenario fields are zero unless the loaded config defines a
+	// `scenarios:` array. Total == 0 means single-pattern mode.
+	ScenarioName     string `json:"scenario_name,omitempty"`
+	ScenarioIndex    int    `json:"scenario_index,omitempty"`
+	ScenarioTotal    int    `json:"scenario_total,omitempty"`
+	ScenarioElapsed  string `json:"scenario_elapsed,omitempty"`
+	ScenarioDuration string `json:"scenario_duration,omitempty"`
+	ScenarioDone     bool   `json:"scenario_done,omitempty"`
 }
 
 // Command represents a command sent to the daemon
@@ -156,6 +164,7 @@ func (d *Daemon) Start() error {
 	d.pool = worker.NewPool(d.cfg.Worker, d.metrics)
 	d.checker = health.NewChecker(d.cfg.Health, d.cfg.Targets, d.metrics)
 	d.ctrl = controller.NewController(d.cfg.Controller, d.cfg.Targets, d.engine, d.pool, d.checker, d.metrics)
+	d.ctrl.AttachScenarios(d.cfg.Scenarios, d.cfg.Pattern)
 
 	// Start metrics server
 	if d.cfg.Metrics.Enabled {
@@ -237,6 +246,15 @@ func (d *Daemon) GetStatus() Status {
 		status.LatencyP99Raw = ctrlStatus.LatencyP99Raw
 		status.LatencyP95Corrected = ctrlStatus.LatencyP95Corrected
 		status.LatencyP99Corrected = ctrlStatus.LatencyP99Corrected
+
+		if sc := ctrlStatus.Scenario; sc.Total > 0 {
+			status.ScenarioName = sc.Name
+			status.ScenarioIndex = sc.Index
+			status.ScenarioTotal = sc.Total
+			status.ScenarioElapsed = sc.Elapsed.Round(time.Second).String()
+			status.ScenarioDuration = sc.Duration.Round(time.Second).String()
+			status.ScenarioDone = sc.Done
+		}
 	}
 
 	return status
