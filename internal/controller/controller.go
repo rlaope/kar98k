@@ -65,7 +65,11 @@ func (c *Controller) AttachScenarios(scenarios []config.Scenario, defaultPattern
 	if len(scenarios) == 0 {
 		return
 	}
-	c.scenarios = NewScenarioRunner(scenarios, c.engine, c.cfg.BaseTPS, c.cfg.MaxTPS, defaultPattern)
+	r := NewScenarioRunner(scenarios, c.engine, c.cfg.BaseTPS, c.cfg.MaxTPS, defaultPattern)
+	if c.metrics != nil {
+		r.SetMetrics(c.metrics)
+	}
+	c.scenarios = r
 }
 
 // buildWeightedTargets creates a weighted list for random selection.

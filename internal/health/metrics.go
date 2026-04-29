@@ -18,6 +18,10 @@ type Metrics struct {
 	QueueDropRate    prometheus.Gauge
 	SpikeActive      prometheus.Gauge
 	TargetHealth     *prometheus.GaugeVec
+
+	// Scenario phase metrics (issue #63).
+	ScenarioPhaseIndex           prometheus.Gauge
+	ScenarioPhaseTransitionsTotal *prometheus.CounterVec
 }
 
 // NewMetrics creates and registers all Prometheus metrics on the default registry.
@@ -112,6 +116,21 @@ func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
 			},
 			[]string{"target"},
 		),
+		ScenarioPhaseIndex: f.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "kar98k",
+				Name:      "scenario_phase_index",
+				Help:      "Current 1-based scenario phase index; 0 when no scenarios are active",
+			},
+		),
+		ScenarioPhaseTransitionsTotal: f.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "kar98k",
+				Name:      "scenario_phase_transitions_total",
+				Help:      "Total number of scenario phase transitions, labelled by from/to phase name",
+			},
+			[]string{"from", "to"},
+		),
 	}
 }
 
@@ -172,6 +191,18 @@ func (m *Metrics) SetTargetHealth(target string, healthy bool) {
 	} else {
 		m.TargetHealth.WithLabelValues(target).Set(0)
 	}
+}
+
+// SetScenarioPhaseIndex sets the current 1-based phase index gauge.
+// Call with 0 when the timeline has completed or no scenarios are running.
+func (m *Metrics) SetScenarioPhaseIndex(idx int) {
+	m.ScenarioPhaseIndex.Set(float64(idx))
+}
+
+// RecordScenarioTransition increments the phase-transition counter.
+// from is empty string for the initial entry into the first phase.
+func (m *Metrics) RecordScenarioTransition(from, to string) {
+	m.ScenarioPhaseTransitionsTotal.WithLabelValues(from, to).Inc()
 }
 
 // IncRequestsInFlight increments the in-flight requests counter.

@@ -6,7 +6,10 @@ import (
 	"time"
 
 	"github.com/kar98k/internal/config"
+	"github.com/kar98k/internal/health"
 	"github.com/kar98k/internal/pattern"
+	"github.com/prometheus/client_golang/prometheus"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // TestScenarioRunner_AdvancesThroughEveryPhase exercises the full
@@ -175,5 +178,106 @@ func TestScenarioRunner_NoOpWhenEmpty(t *testing.T) {
 	runner.Run(ctx) // should return immediately
 	if st := runner.Status(); st.Total != 0 {
 		t.Fatalf("Status on empty runner Total = %d, want 0", st.Total)
+	}
+}
+
+// freshScenarioMetrics returns a Metrics bound to a private registry so
+// duplicate-registration panics cannot occur across test cases.
+func freshScenarioMetrics(t *testing.T) *health.Metrics {
+	t.Helper()
+	return health.NewMetricsWithRegistry(prometheus.NewRegistry())
+}
+
+// gaugeValue reads a Prometheus gauge without the HTTP scrape path.
+func gaugeValue(t *testing.T, g prometheus.Gauge) float64 {
+	t.Helper()
+	var m dto.Metric
+	if err := g.Write(&m); err != nil {
+		t.Fatalf("gauge Write: %v", err)
+	}
+	return m.GetGauge().GetValue()
+}
+
+// counterVecValue reads a single label-set from a CounterVec.
+func counterVecValue(t *testing.T, cv *prometheus.CounterVec, from, to string) float64 {
+	t.Helper()
+	c, err := cv.GetMetricWithLabelValues(from, to)
+	if err != nil {
+		t.Fatalf("GetMetricWithLabelValues(%q,%q): %v", from, to, err)
+	}
+	var m dto.Metric
+	if err := c.Write(&m); err != nil {
+		t.Fatalf("counter Write: %v", err)
+	}
+	return m.GetCounter().GetValue()
+}
+
+// TestScenarioRunner_MetricsCounterAdvances3TimesFor3Phases verifies that
+// kar98k_scenario_phase_transitions_total is incremented once per applyPhase
+// call — including the initial entry into phase 0 — so a 3-phase timeline
+// produces a total count of 3.
+func TestScenarioRunner_MetricsCounterAdvances3TimesFor3Phases(t *testing.T) {
+	eng := pattern.NewEngine(config.Pattern{}, 100, 1000)
+	scenarios := []config.Scenario{
+		{Name: "alpha", Duration: 60 * time.Millisecond, BaseTPS: 10},
+		{Name: "beta", Duration: 60 * time.Millisecond, BaseTPS: 20},
+		{Name: "gamma", Duration: 60 * time.Millisecond, BaseTPS: 30},
+	}
+	m := freshScenarioMetrics(t)
+	runner := NewScenarioRunner(scenarios, eng, 100, 1000, config.Pattern{})
+	runner.SetMetrics(m)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 500*time.Millisecond)
+	defer cancel()
+	runner.Run(ctx) // blocks until timeline complete
+
+	// Verify each labelled transition was recorded exactly once.
+	if got := counterVecValue(t, m.ScenarioPhaseTransitionsTotal, "", "alpha"); got != 1 {
+		t.Fatalf(`transitions{"","alpha"} = %v, want 1`, got)
+	}
+	if got := counterVecValue(t, m.ScenarioPhaseTransitionsTotal, "alpha", "beta"); got != 1 {
+		t.Fatalf(`transitions{"alpha","beta"} = %v, want 1`, got)
+	}
+	if got := counterVecValue(t, m.ScenarioPhaseTransitionsTotal, "beta", "gamma"); got != 1 {
+		t.Fatalf(`transitions{"beta","gamma"} = %v, want 1`, got)
+	}
+}
+
+// TestScenarioRunner_MetricsGaugeMidRunAndZeroAfter verifies that
+// kar98k_scenario_phase_index equals idx+1 while a phase is active and
+// falls back to 0 once the timeline completes (markStopped resets it).
+func TestScenarioRunner_MetricsGaugeMidRunAndZeroAfter(t *testing.T) {
+	eng := pattern.NewEngine(config.Pattern{}, 100, 1000)
+	pause := 80 * time.Millisecond
+	scenarios := []config.Scenario{
+		{Name: "p1", Duration: pause, BaseTPS: 10},
+		{Name: "p2", Duration: pause, BaseTPS: 20},
+	}
+	m := freshScenarioMetrics(t)
+	runner := NewScenarioRunner(scenarios, eng, 100, 1000, config.Pattern{})
+	runner.SetMetrics(m)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	done := make(chan struct{})
+	go func() { runner.Run(ctx); close(done) }()
+
+	// Mid-run: gauge should be 1 shortly after phase 1 starts.
+	time.Sleep(pause / 4)
+	if got := gaugeValue(t, m.ScenarioPhaseIndex); got != 1 {
+		t.Fatalf("mid phase 1: ScenarioPhaseIndex = %v, want 1", got)
+	}
+
+	// Mid-run: wait for phase 2 to start; gauge should be 2.
+	time.Sleep(pause)
+	if got := gaugeValue(t, m.ScenarioPhaseIndex); got != 2 {
+		t.Fatalf("mid phase 2: ScenarioPhaseIndex = %v, want 2", got)
+	}
+
+	// After timeline: gauge should be reset to 0 by markStopped.
+	<-done
+	if got := gaugeValue(t, m.ScenarioPhaseIndex); got != 0 {
+		t.Fatalf("post-timeline: ScenarioPhaseIndex = %v, want 0", got)
 	}
 }

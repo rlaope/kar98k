@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/kar98k/internal/config"
+	"github.com/kar98k/internal/health"
 	"github.com/kar98k/internal/pattern"
 )
 
@@ -20,6 +21,7 @@ type ScenarioRunner struct {
 	scenarios []config.Scenario
 	engine    *pattern.Engine
 	defaults  scenarioDefaults
+	metrics   *health.Metrics
 
 	mu          sync.RWMutex
 	current     int
@@ -56,6 +58,13 @@ func NewScenarioRunner(
 		},
 		current: -1,
 	}
+}
+
+// SetMetrics attaches a Metrics instance so the runner can update
+// kar98k_scenario_phase_index and kar98k_scenario_phase_transitions_total.
+// It is safe to call before Run; calling after Run starts is not supported.
+func (r *ScenarioRunner) SetMetrics(m *health.Metrics) {
+	r.metrics = m
 }
 
 // Total returns the number of phases. Useful for status surfaces.
@@ -159,10 +168,20 @@ func (r *ScenarioRunner) applyPhase(idx int) {
 	r.engine.ReplacePattern(pat)
 
 	r.mu.Lock()
+	prev := r.current
 	r.current = idx
 	r.phaseStart = time.Now()
 	r.transitions++
 	r.mu.Unlock()
+
+	if r.metrics != nil {
+		fromName := ""
+		if prev >= 0 && prev < len(r.scenarios) {
+			fromName = r.scenarios[prev].Name
+		}
+		r.metrics.RecordScenarioTransition(fromName, s.Name)
+		r.metrics.SetScenarioPhaseIndex(idx + 1)
+	}
 
 	log.Printf("[scenarios] phase %d/%d %q — baseTPS=%.0f maxTPS=%.0f duration=%s",
 		idx+1, len(r.scenarios), s.Name, baseTPS, maxTPS, s.Duration)
@@ -184,6 +203,9 @@ func (r *ScenarioRunner) markStopped() {
 	r.mu.Lock()
 	r.stopped = true
 	r.mu.Unlock()
+	if r.metrics != nil {
+		r.metrics.SetScenarioPhaseIndex(0)
+	}
 }
 
 // ScenarioStatus is the read-only snapshot exposed via the controller
