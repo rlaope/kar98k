@@ -78,6 +78,17 @@ tr:hover { background: #1a1a1a; }
 .history-row .ts { color: #555; }
 .history-row .val { color: #87CEEB; }
 .history-row .spike { color: #fbbf24; }
+
+#forecast-panel { padding: 16px 20px; border-top: 1px solid #282828; }
+#forecast-panel h3 { font-size: 12px; color: #777; text-transform: uppercase; font-weight: 500; margin-bottom: 4px; }
+#forecast-panel .desc { font-size: 11px; color: #555; margin-bottom: 10px; }
+#forecast-panel svg { display: block; width: 100%; }
+.fc-spike { fill: #fbbf24; cursor: default; }
+.fc-phase-line { stroke: #444; stroke-width: 1; }
+.fc-phase-label { fill: #555; font-size: 10px; font-family: monospace; }
+.fc-grid { stroke: #222; stroke-width: 1; }
+.fc-axis { fill: #555; font-size: 10px; font-family: monospace; }
+.fc-band rect { opacity: 0.18; }
 </style>
 </head>
 <body>
@@ -144,6 +155,19 @@ tr:hover { background: #1a1a1a; }
       <div class="chart-desc">Server response time. P95 = 95% of requests are faster than this value.</div>
       <div class="chart-wrap"><canvas id="c2"></canvas></div>
     </div>
+    <section id="forecast-panel">
+      <h3>Forecast <span style="color:#555;font-size:10px;font-weight:400;text-transform:none">next 24h</span></h3>
+      <div class="desc">Predicted TPS over the next 24 hours. Spike markers show Poisson spike windows. Phase boundaries separate pattern phases.</div>
+      <svg id="fc-svg" viewBox="0 0 800 160" preserveAspectRatio="none">
+        <g id="fc-bands" class="fc-band"></g>
+        <g id="fc-grid"></g>
+        <g id="fc-axes"></g>
+        <path id="fc-fill" fill="#87CEEB11" stroke="none"></path>
+        <path id="fc-line" fill="none" stroke="#87CEEB" stroke-width="1.5"></path>
+        <g id="fc-spikes"></g>
+        <g id="fc-phases"></g>
+      </svg>
+    </section>
   </div>
   <div class="right">
     <div class="panel">
@@ -307,6 +331,109 @@ fetch('/api/state').then(r=>r.json()).then(d=>setButtons(d.running));
 const es=new EventSource('/events');
 es.addEventListener('init',e=>{const d=JSON.parse(e.data);document.getElementById('scenario').textContent=d.scenario||'-';document.getElementById('preset').textContent=d.preset||'-';});
 es.onmessage=e=>upd(JSON.parse(e.data));
+
+// Forecast panel
+function renderForecast(pts) {
+  const panel = document.getElementById('forecast-panel');
+  if (!pts || !pts.length) { panel.style.display='none'; return; }
+  panel.style.display='';
+
+  const VW=800, VH=160, PL=44, PR=8, PT=8, PB=24;
+  const cw=VW-PL-PR, ch=VH-PT-PB;
+
+  const times = pts.map(p=>new Date(p.time).getTime());
+  const tpss  = pts.map(p=>p.tps);
+  const t0=times[0], t1=times[times.length-1], tspan=t1-t0||1;
+  const maxTPS = Math.max(...tpss) * 1.1 || 1;
+
+  const tx = t => PL + (t-t0)/tspan * cw;
+  const ty = v => PT + ch - Math.min(v/maxTPS,1)*ch;
+
+  // Schedule band: group by hour-of-day, colour by mean TPS vs global mean
+  const globalMean = tpss.reduce((a,b)=>a+b,0)/tpss.length;
+  const hourBuckets = {};
+  pts.forEach(p => {
+    const h = new Date(p.time).getHours();
+    if (!hourBuckets[h]) hourBuckets[h] = [];
+    hourBuckets[h].push(p.tps);
+  });
+  const hourMeans = {};
+  Object.keys(hourBuckets).forEach(h => {
+    const b = hourBuckets[h];
+    hourMeans[h] = b.reduce((a,v)=>a+v,0)/b.length;
+  });
+  const bandH = 6, bandY = PT+ch-bandH;
+  let bandHTML = '';
+  pts.forEach((p,i) => {
+    if (i===pts.length-1) return;
+    const h = new Date(p.time).getHours();
+    const ratio = globalMean>0 ? hourMeans[h]/globalMean : 0;
+    const alpha = Math.min(ratio*0.4, 0.6).toFixed(2);
+    const x1=tx(times[i]), x2=tx(times[i+1]);
+    bandHTML += '<rect x="'+x1+'" y="'+bandY+'" width="'+(x2-x1)+'" height="'+bandH+'" fill="#87CEEB" opacity="'+alpha+'"/>';
+  });
+  document.getElementById('fc-bands').innerHTML = bandHTML;
+
+  // Grid lines + Y axis labels
+  let gridHTML='', axisHTML='';
+  for (let i=0;i<=4;i++) {
+    const y = PT + ch*i/4;
+    const v = maxTPS*(4-i)/4;
+    gridHTML += '<line class="fc-grid" x1="'+PL+'" y1="'+y+'" x2="'+(VW-PR)+'" y2="'+y+'"/>';
+    const lbl = v>=1000?(v/1000).toFixed(1)+'k':v.toFixed(v<10?1:0);
+    axisHTML += '<text class="fc-axis" x="'+(PL-2)+'" y="'+(y+3)+'" text-anchor="end">'+lbl+'</text>';
+  }
+  // X axis: every 4h
+  for (let h=0;h<=24;h+=4) {
+    const t = t0 + h/24*tspan;
+    const x = tx(t);
+    const hLabel = new Date(t).getHours();
+    axisHTML += '<text class="fc-axis" x="'+x+'" y="'+(VH-2)+'" text-anchor="middle">'+String(hLabel).padStart(2,'0')+'h</text>';
+  }
+  document.getElementById('fc-grid').innerHTML = gridHTML;
+  document.getElementById('fc-axes').innerHTML = axisHTML;
+
+  // Line + fill path
+  let d='', df='';
+  pts.forEach((p,i) => {
+    const x=tx(times[i]), y=ty(p.tps);
+    const cmd = i===0?'M':'L';
+    d += cmd+x.toFixed(1)+' '+y.toFixed(1)+' ';
+  });
+  df = d + 'L'+tx(times[times.length-1]).toFixed(1)+' '+(PT+ch)+' L'+PL+' '+(PT+ch)+' Z';
+  document.getElementById('fc-line').setAttribute('d', d.trim());
+  document.getElementById('fc-fill').setAttribute('d', df.trim());
+
+  // Spike markers
+  let spkHTML = '';
+  pts.forEach((p,i) => {
+    if (!p.spiking) return;
+    const x=tx(times[i]), y=ty(p.tps)-5;
+    const timeStr = new Date(p.time).toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'});
+    spkHTML += '<circle class="fc-spike" cx="'+x+'" cy="'+y+'" r="3"><title>'+timeStr+' — '+p.tps.toFixed(1)+' TPS</title></circle>';
+  });
+  document.getElementById('fc-spikes').innerHTML = spkHTML;
+
+  // Phase boundaries
+  let phHTML = '';
+  for (let i=1;i<pts.length;i++) {
+    if (pts[i].phase && pts[i].phase !== pts[i-1].phase) {
+      const x = tx(times[i]);
+      phHTML += '<line class="fc-phase-line" x1="'+x+'" y1="'+PT+'" x2="'+x+'" y2="'+(PT+ch)+'"/>';
+      phHTML += '<text class="fc-phase-label" x="'+(x+3)+'" y="'+(PT+12)+'">'+pts[i].phase+'</text>';
+    }
+  }
+  document.getElementById('fc-phases').innerHTML = phHTML;
+}
+
+function loadForecast() {
+  fetch('/api/forecast').then(r=>{
+    if(r.status===501){document.getElementById('forecast-panel').style.display='none';return null;}
+    return r.json();
+  }).then(d=>{if(d)renderForecast(d);});
+}
+loadForecast();
+setInterval(loadForecast, 60000);
 </script>
 </body>
 </html>`
