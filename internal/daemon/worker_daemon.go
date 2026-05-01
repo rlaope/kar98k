@@ -2,6 +2,7 @@ package daemon
 
 import (
 	"context"
+	"fmt"
 	"log"
 	"sync"
 	"sync/atomic"
@@ -24,66 +25,234 @@ const workerVersion = "v1"
 const statsErrorBail = 10
 
 // WorkerDaemon runs the worker side of a distributed kar session.
-// It dials the master, registers, receives per-tick TPS updates via a
-// server-stream, pushes histogram snapshots via a client-stream, and
-// runs a local job-submission loop identical to controller.generateLoop.
-//
-// No controller, no scheduler, no scenarios, no dashboard.
 type WorkerDaemon struct {
 	masterAddr string
 	workerAddr string
+	clientOpts rpc.ClientOptions
 
-	cfg     config.Worker
+	// mu guards ctx, cancel, and the per-cycle resources (pool, checker,
+	// client). Stop() snapshots these under mu so it never races with the
+	// writes in Start() or the resets in Run().
+	mu      sync.Mutex
+	ctx     context.Context
+	cancel  context.CancelFunc
 	pool    *worker.Pool
-	metrics *health.Metrics
 	checker *health.Checker
 	client  *rpc.WorkerClient
 
-	// targets populated from RegisterResp
-	targets []config.Target
-	picker  *targets.Picker
-
-	// clientByProto holds one protocol.Client per protocol, built ONCE
-	// in Start. The hot path reads this map directly so keep-alive,
-	// connection pools, and HTTP/2 multiplexing remain effective.
-	// Why: the previous per-Submit allocation defeated MaxIdleConns and
-	// caused P95/P99 to drift well above the single-process baseline.
+	// Fields written only in Start() before goroutines launch — no concurrent
+	// writer, so no lock needed for these after Start() returns.
+	cfg           config.Worker
+	targets       []config.Target
+	picker        *targets.Picker
 	clientByProto map[config.Protocol]protocol.Client
+	metrics       *health.Metrics
 
-	// consecutiveStatsErrors tracks unbroken StatsSender failures so
-	// the worker can self-evict after statsErrorBail and let the
-	// supervisor restart it with a fresh master connection.
+	// consecutiveStatsErrors is only read/written by goroutine B (stats pusher)
+	// and reset in Run() after Wait() — single goroutine access at each point.
 	consecutiveStatsErrors int
 
 	draining atomic.Bool
+	// stopped is set by Stop() before cancelling so Run() will not install a
+	// fresh context for a new dial cycle after Stop() fires.
+	stopped atomic.Bool
 
-	ctx    context.Context
-	cancel context.CancelFunc
-	wg     sync.WaitGroup
+	wg sync.WaitGroup
 }
 
-// NewWorkerDaemon constructs a WorkerDaemon. Start must be called to
-// connect to the master and begin traffic.
-func NewWorkerDaemon(masterAddr, workerAddr string) *WorkerDaemon {
+// NewWorkerDaemon constructs a WorkerDaemon. Call Run for automatic reconnect
+// or Start for a single connection attempt. Pass rpc.ClientOptions{} to
+// preserve the current plaintext/no-auth default.
+func NewWorkerDaemon(masterAddr, workerAddr string, opts rpc.ClientOptions) *WorkerDaemon {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &WorkerDaemon{
 		masterAddr: masterAddr,
 		workerAddr: workerAddr,
+		clientOpts: opts,
 		ctx:        ctx,
 		cancel:     cancel,
 	}
 }
 
+// cancelCtx calls the current cancel function under mu.
+func (w *WorkerDaemon) cancelCtx() {
+	w.mu.Lock()
+	c := w.cancel
+	w.mu.Unlock()
+	c()
+}
+
+// currentCtx returns the current context under mu.
+func (w *WorkerDaemon) currentCtx() context.Context {
+	w.mu.Lock()
+	ctx := w.ctx
+	w.mu.Unlock()
+	return ctx
+}
+
+// swapCtx installs a new context+cancel pair and returns the new ctx.
+// Must only be called from Run() between reconnect cycles after all goroutines
+// from the previous cycle have exited (i.e., after Wait()).
+func (w *WorkerDaemon) swapCtx() context.Context {
+	newCtx, newCancel := context.WithCancel(context.Background())
+	w.mu.Lock()
+	w.ctx = newCtx
+	w.cancel = newCancel
+	w.mu.Unlock()
+	return newCtx
+}
+
+// setCycleResources stores the per-cycle resources under mu. Called at the
+// end of a successful Start() once all fields are populated.
+func (w *WorkerDaemon) setCycleResources(pool *worker.Pool, checker *health.Checker, client *rpc.WorkerClient) {
+	w.mu.Lock()
+	w.pool = pool
+	w.checker = checker
+	w.client = client
+	w.mu.Unlock()
+}
+
+// clearCycleResources zeroes the per-cycle resources under mu and returns the
+// previous values so the caller can tear them down outside the lock.
+func (w *WorkerDaemon) clearCycleResources() (pool *worker.Pool, checker *health.Checker, client *rpc.WorkerClient) {
+	w.mu.Lock()
+	pool = w.pool
+	checker = w.checker
+	client = w.client
+	w.pool = nil
+	w.checker = nil
+	w.client = nil
+	w.mu.Unlock()
+	return
+}
+
+// backoffDuration returns 2^(n-1) seconds capped at max.
+// n=1->1s, n=2->2s, n=3->4s, n=4->8s, n>=5->cap.
+func backoffDuration(n int, max time.Duration) time.Duration {
+	const base = time.Second
+	d := base
+	for i := 1; i < n; i++ {
+		d *= 2
+		if d >= max {
+			return max
+		}
+	}
+	if d > max {
+		return max
+	}
+	return d
+}
+
+// teardownCycle drains and stops pool/checker/client obtained via clearCycleResources.
+func teardownCycle(pool *worker.Pool, checker *health.Checker, client *rpc.WorkerClient) {
+	const drainTimeout = 10 * time.Second
+	if pool != nil {
+		pool.Drain(drainTimeout)
+		pool.Stop()
+	}
+	if checker != nil {
+		checker.Stop()
+	}
+	if client != nil {
+		client.Close()
+	}
+}
+
+// Run connects to the master with automatic exponential-backoff reconnect.
+// It blocks until ctx is cancelled or opts.MaxAttempts consecutive dial
+// failures are exhausted -- in the latter case it returns a non-nil error
+// so a process supervisor (k8s/systemd) can apply CrashLoopBackoff.
+func (w *WorkerDaemon) Run() error {
+	maxBackoff := w.clientOpts.BackoffMax
+	if maxBackoff <= 0 {
+		maxBackoff = 30 * time.Second
+	}
+	maxAttempts := w.clientOpts.MaxAttempts // 0 = unlimited
+
+	consecutiveFails := 0
+	attempt := 0
+
+	for {
+		if w.stopped.Load() {
+			return nil
+		}
+		select {
+		case <-w.currentCtx().Done():
+			return nil
+		default:
+		}
+
+		attempt++
+		log.Printf("[worker-daemon] connect attempt %d (master=%s)", attempt, w.masterAddr)
+
+		err := w.Start()
+		if err != nil {
+			consecutiveFails++
+			log.Printf("[worker-daemon] connect failed (attempt %d, consecutive=%d): %v",
+				attempt, consecutiveFails, err)
+
+			if maxAttempts > 0 && consecutiveFails >= maxAttempts {
+				log.Printf("[worker-daemon] exceeded max reconnect attempts (%d), exiting", maxAttempts)
+				return fmt.Errorf("exceeded max reconnect attempts (%d): %w", maxAttempts, err)
+			}
+
+			sleep := backoffDuration(consecutiveFails, maxBackoff)
+			log.Printf("[worker-daemon] reconnect backoff %s (attempt %d)", sleep, attempt)
+			select {
+			case <-w.currentCtx().Done():
+				return nil
+			case <-time.After(sleep):
+			}
+			continue
+		}
+
+		// Start succeeded -- wait for all supervision goroutines to finish.
+		w.Wait()
+
+		// If stopped or context was cancelled, exit cleanly.
+		if w.stopped.Load() {
+			return nil
+		}
+		select {
+		case <-w.currentCtx().Done():
+			return nil
+		default:
+		}
+
+		// Stream ended unexpectedly -- tear down this cycle then reconnect.
+		pool, checker, client := w.clearCycleResources()
+		teardownCycle(pool, checker, client)
+
+		// Check stopped again before installing a new context so Stop() cannot
+		// miss the new cancel if it fires between clearCycleResources and swapCtx.
+		if w.stopped.Load() {
+			return nil
+		}
+		consecutiveFails = 0
+		w.consecutiveStatsErrors = 0
+		w.draining.Store(false)
+		newCtx := w.swapCtx()
+
+		sleep := backoffDuration(1, maxBackoff)
+		log.Printf("[worker-daemon] stream ended -- reconnecting in %s", sleep)
+		select {
+		case <-newCtx.Done():
+			return nil
+		case <-time.After(sleep):
+		}
+	}
+}
+
 // Start dials master, registers, and launches the three goroutines:
-// A — rate-update receiver, B — stats pusher, C — job submission loop.
+// A -- rate-update receiver, B -- stats pusher, C -- job submission loop.
 func (w *WorkerDaemon) Start() error {
-	c, err := rpc.NewWorkerClient(w.masterAddr, w.workerAddr)
+	ctx := w.currentCtx()
+	c, err := rpc.NewWorkerClient(w.masterAddr, w.workerAddr, w.clientOpts)
 	if err != nil {
 		return err
 	}
-	w.client = c
 
-	if err := c.Register(w.ctx, workerVersion); err != nil {
+	if err := c.Register(ctx, workerVersion); err != nil {
 		c.Close()
 		return err
 	}
@@ -108,13 +277,11 @@ func (w *WorkerDaemon) Start() error {
 	w.cfg = poolCfg
 
 	w.metrics = health.NewMetrics()
-	w.pool = worker.NewPool(w.cfg, w.metrics)
-	w.pool.Start(w.ctx)
+	pool := worker.NewPool(w.cfg, w.metrics)
+	pool.Start(ctx)
 
 	// Why: build the three protocol clients exactly once so MaxIdleConns
-	// and HTTP/2 connection reuse actually take effect. The previous
-	// per-Submit allocation rebuilt transports and caused tail-latency
-	// regressions versus the single-process baseline.
+	// and HTTP/2 connection reuse actually take effect.
 	clientCfg := protocol.ClientConfig{
 		MaxIdleConns:    w.cfg.MaxIdleConns,
 		IdleConnTimeout: w.cfg.IdleConnTimeout,
@@ -126,34 +293,46 @@ func (w *WorkerDaemon) Start() error {
 		config.ProtocolGRPC:  protocol.NewGRPCClient(clientCfg),
 	}
 
-	// Health checker — each worker checks its own targets locally.
+	// Health checker -- each worker checks its own targets locally.
 	healthCfg := config.Health{
 		Enabled:  true,
 		Interval: 10 * time.Second,
 		Timeout:  5 * time.Second,
 	}
-	w.checker = health.NewChecker(healthCfg, w.targets, w.metrics)
-	w.checker.Start(w.ctx)
+	checker := health.NewChecker(healthCfg, w.targets, w.metrics)
+	checker.Start(ctx)
 
-	rateStream, err := c.OpenRateUpdates(w.ctx)
+	rateStream, err := c.OpenRateUpdates(ctx)
 	if err != nil {
-		w.pool.Stop()
+		pool.Stop()
+		checker.Stop()
 		c.Close()
 		return err
 	}
 
-	statsStream, err := c.OpenStats(w.ctx)
+	statsStream, err := c.OpenStats(ctx)
 	if err != nil {
-		w.pool.Stop()
+		pool.Stop()
+		checker.Stop()
 		c.Close()
 		return err
 	}
+
+	// Publish resources under mu so Stop() can safely snapshot them.
+	w.setCycleResources(pool, checker, c)
+
+	// outOfBandStats carries final per-phase StatsPush messages produced by
+	// the rate-update goroutine when a phase transition is observed. The
+	// stats-sender goroutine drains it before each interval push so the
+	// master sees a clean per-phase boundary. Buffered so a slow stats
+	// sender never blocks the rate-update receiver. See #68.
+	outOfBandStats := make(chan *pb.StatsPush, 8)
 
 	// Goroutine A: receive rate updates from master.
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		c.RunRateUpdates(w.ctx, rateStream, func(u *pb.RateUpdate) {
+		c.RunRateUpdates(ctx, rateStream, func(u *pb.RateUpdate) {
 			switch u.Command {
 			case pb.Command_DRAIN:
 				log.Printf("[worker-daemon] DRAIN command received, stopping job submission")
@@ -161,35 +340,69 @@ func (w *WorkerDaemon) Start() error {
 			case pb.Command_STOP:
 				log.Printf("[worker-daemon] STOP command received")
 				w.draining.Store(true)
-				w.cancel()
+				w.cancelCtx()
 			default:
-				if !w.draining.Load() {
-					w.pool.SetRate(u.TargetTps)
+				if w.draining.Load() {
+					return
 				}
+				// Phase transition: snapshot + flip atomically, ship the
+				// previous phase's histograms out-of-band tagged with prevPhase
+				// so master attributes them correctly. Empty PhaseName is
+				// treated as "still in default phase" — no flip triggered when
+				// already at "" (#68 v1<->v2 backwards compat).
+				if u.PhaseName != pool.CurrentPhase() {
+					rawBytes, corrBytes, prevPhase, err := pool.SnapshotAndAdvancePhase(u.PhaseName)
+					if err != nil {
+						log.Printf("[worker-daemon] phase-flip snapshot error: %v", err)
+					} else {
+						push := &pb.StatsPush{
+							WorkerId:     c.WorkerID,
+							Timestamp:    uint64(time.Now().UnixMilli()),
+							ObservedTps:  0,
+							QueueDrops:   pool.TotalDrops(),
+							HdrRaw:       rawBytes,
+							HdrCorrected: corrBytes,
+							ErrorRate:    pool.ErrorRate(),
+							PhaseName:    prevPhase,
+						}
+						select {
+						case outOfBandStats <- push:
+						default:
+							log.Printf("[worker-daemon] out-of-band stats buffer full, dropping phase-flip snapshot for %q", prevPhase)
+						}
+					}
+				}
+				pool.SetRate(u.TargetTps)
 			}
 		})
-		// Stream ended — drain and exit.
+		// Stream ended -- signal drain and exit.
 		log.Printf("[worker-daemon] rate stream ended, draining")
 		w.draining.Store(true)
-		w.cancel()
+		w.cancelCtx()
 	}()
 
-	// Goroutine B: push histogram snapshots to master. Self-evicts after
-	// statsErrorBail consecutive failures so the supervisor can restart
-	// us with a fresh master connection.
+	// Goroutine B: push histogram snapshots to master.
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		c.StatsSender(w.ctx, statsStream, func() *pb.StatsPush {
-			rawBytes, corrBytes, err := w.pool.SnapshotAndResetHistograms()
+		c.StatsSender(ctx, statsStream, func() *pb.StatsPush {
+			// Drain any out-of-band phase-boundary push first so the next
+			// interval snapshot only contains samples from the new phase.
+			select {
+			case oob := <-outOfBandStats:
+				return oob
+			default:
+			}
+
+			rawBytes, corrBytes, err := pool.SnapshotAndResetHistograms()
 			if err != nil {
 				w.consecutiveStatsErrors++
 				log.Printf("[worker-daemon] snapshot error %d/%d: %v",
 					w.consecutiveStatsErrors, statsErrorBail, err)
 				if w.consecutiveStatsErrors >= statsErrorBail {
-					log.Printf("[worker-daemon] %d consecutive stats failures — bailing for supervisor restart",
+					log.Printf("[worker-daemon] %d consecutive stats failures -- bailing",
 						w.consecutiveStatsErrors)
-					w.cancel()
+					w.cancelCtx()
 				}
 				return nil
 			}
@@ -197,20 +410,21 @@ func (w *WorkerDaemon) Start() error {
 			return &pb.StatsPush{
 				WorkerId:     c.WorkerID,
 				Timestamp:    uint64(time.Now().UnixMilli()),
-				ObservedTps:  0, // pool measures internally; master uses hdr data
-				QueueDrops:   w.pool.TotalDrops(),
+				ObservedTps:  0,
+				QueueDrops:   pool.TotalDrops(),
 				HdrRaw:       rawBytes,
 				HdrCorrected: corrBytes,
-				ErrorRate:    w.pool.ErrorRate(),
+				ErrorRate:    pool.ErrorRate(),
+				PhaseName:    pool.CurrentPhase(),
 			}
 		})
 	}()
 
-	// Goroutine C: local job submission loop (mirrors controller.generateLoop).
+	// Goroutine C: local job submission loop.
 	w.wg.Add(1)
 	go func() {
 		defer w.wg.Done()
-		w.runJobLoop()
+		w.runJobLoop(ctx, pool, checker)
 	}()
 
 	log.Printf("[worker-daemon] started (master=%s worker=%s targets=%d)",
@@ -218,35 +432,35 @@ func (w *WorkerDaemon) Start() error {
 	return nil
 }
 
-// Wait blocks until the worker daemon exits (context cancelled or drain complete).
+// Wait blocks until the worker daemon exits.
 func (w *WorkerDaemon) Wait() {
 	w.wg.Wait()
 }
 
-// Stop signals a graceful shutdown and waits up to drainTimeout for
-// in-flight requests to complete before tearing down the pool.
+// Stop signals a graceful shutdown. Safe to call concurrently with Run().
 func (w *WorkerDaemon) Stop() {
-	const drainTimeout = 10 * time.Second
+	// Set stopped before cancelling so Run() will not install a fresh ctx
+	// after the cancel fires.
+	w.stopped.Store(true)
 	w.draining.Store(true)
-	w.cancel()
+	w.cancelCtx()
 	w.wg.Wait()
-	w.pool.Drain(drainTimeout)
-	w.pool.Stop()
-	w.checker.Stop()
-	w.client.Close()
+	// Snapshot resources under mu then tear them down outside the lock.
+	pool, checker, client := w.clearCycleResources()
+	teardownCycle(pool, checker, client)
 	log.Printf("[worker-daemon] stopped")
 }
 
-// runJobLoop is Goroutine C: submits jobs to the local pool at the rate
-// the pool's limiter allows. Mirrors controller.submitJobs — 1ms tick ×
-// 10 attempts per tick; actual rate is controlled by pool.SetRate.
-func (w *WorkerDaemon) runJobLoop() {
+// runJobLoop submits jobs to the local pool at the rate the limiter allows.
+// Receives pool and checker as parameters (captured at Start time) to avoid
+// reading w.pool/w.checker after they may have been cleared by Stop().
+func (w *WorkerDaemon) runJobLoop(ctx context.Context, pool *worker.Pool, checker *health.Checker) {
 	ticker := time.NewTicker(time.Millisecond)
 	defer ticker.Stop()
 
 	for {
 		select {
-		case <-w.ctx.Done():
+		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			if w.draining.Load() {
@@ -257,7 +471,7 @@ func (w *WorkerDaemon) runJobLoop() {
 				if t == nil {
 					continue
 				}
-				if w.checker != nil && !w.checker.IsHealthy(t.Name) {
+				if checker != nil && !checker.IsHealthy(t.Name) {
 					continue
 				}
 				client, ok := w.clientByProto[t.Protocol]
@@ -268,8 +482,8 @@ func (w *WorkerDaemon) runJobLoop() {
 					Target: *t,
 					Client: client,
 				}
-				if !w.pool.Submit(job) {
-					break // queue full — back off for this tick
+				if !pool.Submit(job) {
+					break
 				}
 			}
 		}
@@ -306,4 +520,3 @@ func targetSpecsToConfig(specs []*pb.TargetSpec) []config.Target {
 	}
 	return out
 }
-

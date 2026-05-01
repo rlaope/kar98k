@@ -83,10 +83,14 @@ type Pool struct {
 	paused atomic.Bool
 
 	// Latency tracking. hdrhistogram.Histogram is not goroutine-safe,
-	// so all access is serialised through latMu.
+	// so all access is serialised through latMu. currentPhase is the
+	// scenario phase the histograms have been collecting for; it is
+	// guarded by latMu (NOT a separate atomic) so a snapshot+phase-flip
+	// can be done atomically in one critical section. See #68.
 	latMu        sync.Mutex
 	latRaw       *hdrhistogram.Histogram // observed latency (t_done - t_sent)
 	latCorrected *hdrhistogram.Histogram // CO-corrected via RecordCorrectedValue
+	currentPhase string
 }
 
 // NewPool creates a new worker pool.
@@ -402,6 +406,17 @@ func (p *Pool) Submit(job Job) bool {
 	}
 }
 
+// SetPhase records the active scenario phase under latMu so future
+// SnapshotAndResetHistograms callers can read it via CurrentPhase().
+// Used in solo mode by the controller's ScenarioRunner; on workers the
+// phase is set via SnapshotAndAdvancePhase instead. Empty string is
+// allowed (means "no phase").
+func (p *Pool) SetPhase(phase string) {
+	p.latMu.Lock()
+	p.currentPhase = phase
+	p.latMu.Unlock()
+}
+
 // SetRate updates the rate limiter.
 func (p *Pool) SetRate(tps float64) {
 	p.mu.Lock()
@@ -494,6 +509,45 @@ func (p *Pool) SnapshotAndResetHistograms() (rawBytes, corrBytes []byte, err err
 	p.latCorrected.Reset()
 
 	return rawBytes, corrBytes, nil
+}
+
+// SnapshotAndAdvancePhase atomically encodes the current histograms,
+// resets them, and flips the active phase pointer to newPhase. Returns
+// the encoded snapshot tagged with the prevPhase so the caller can ship
+// a final StatsPush attributing those samples to the previous phase
+// before any new samples land in the (now-fresh) histograms.
+//
+// All steps run under p.latMu in one critical section so recordLatency
+// either lands in the previous phase's histogram (and is captured by
+// the snapshot) or in the new phase's histogram — never split. See #68.
+func (p *Pool) SnapshotAndAdvancePhase(newPhase string) (rawBytes, corrBytes []byte, prevPhase string, err error) {
+	p.latMu.Lock()
+	defer p.latMu.Unlock()
+
+	prevPhase = p.currentPhase
+
+	rawBytes, err = p.latRaw.Encode(hdrhistogram.V2CompressedEncodingCookieBase)
+	if err != nil {
+		return nil, nil, prevPhase, err
+	}
+	p.latRaw.Reset()
+
+	corrBytes, err = p.latCorrected.Encode(hdrhistogram.V2CompressedEncodingCookieBase)
+	if err != nil {
+		return nil, nil, prevPhase, err
+	}
+	p.latCorrected.Reset()
+
+	p.currentPhase = newPhase
+	return rawBytes, corrBytes, prevPhase, nil
+}
+
+// CurrentPhase returns the active scenario phase name under latMu.
+// Returns "" before SnapshotAndAdvancePhase has ever been called.
+func (p *Pool) CurrentPhase() string {
+	p.latMu.Lock()
+	defer p.latMu.Unlock()
+	return p.currentPhase
 }
 
 // Stop gracefully stops the worker pool.

@@ -236,7 +236,7 @@ func (d *Daemon) startSolo() {
 // startMaster initialises the distributed-master path: gRPC server +
 // WorkerRegistry as PoolFacade; no local pool or health checker.
 func (d *Daemon) startMaster() error {
-	d.registry = rpc.NewWorkerRegistry()
+	d.registry = rpc.NewWorkerRegistry(rpc.WithMetrics(d.metrics))
 	d.checker = health.NewChecker(d.cfg.Health, d.cfg.Targets, d.metrics)
 	d.ctrl = controller.NewController(d.cfg.Controller, d.cfg.Targets, d.engine, d.registry, d.checker, d.metrics, controller.NoopSubmitter{})
 	d.ctrl.AttachScenarios(d.cfg.Scenarios, d.cfg.Pattern)
@@ -245,7 +245,19 @@ func (d *Daemon) startMaster() error {
 	if listen == "" {
 		listen = ":7777"
 	}
-	grpcSrv, err := rpc.NewGRPCServer(listen, d.registry)
+	var grpcOpts []rpc.GRPCServerOption
+	if d.cfg.Master.TLS != nil {
+		tlsOpt, err := rpc.WithTLS(d.cfg.Master.TLS)
+		if err != nil {
+			return fmt.Errorf("gRPC TLS: %w", err)
+		}
+		grpcOpts = append(grpcOpts, tlsOpt)
+	}
+	if d.cfg.Master.AuthToken != "" {
+		grpcOpts = append(grpcOpts, rpc.WithAuthToken(d.cfg.Master.AuthToken))
+	}
+
+	grpcSrv, err := rpc.NewGRPCServer(listen, d.registry, grpcOpts...)
 	if err != nil {
 		return fmt.Errorf("gRPC server: %w", err)
 	}

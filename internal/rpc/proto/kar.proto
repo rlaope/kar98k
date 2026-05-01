@@ -58,6 +58,11 @@ enum Command {
 message RateUpdate {
   double  target_tps = 1;
   Command command    = 2;
+  // phase_name carries the active scenario phase from master to worker.
+  // Empty string means "no scenarios" (single-pattern mode). When the
+  // worker observes a change it snapshots its histograms tagged with the
+  // PREVIOUS phase before flipping. See #68.
+  string  phase_name = 3;
 }
 
 message StatsPush {
@@ -68,6 +73,10 @@ message StatsPush {
   bytes  hdr_raw       = 5;
   bytes  hdr_corrected = 6;
   double error_rate    = 7;
+  // phase_name tags this snapshot with the scenario phase the contained
+  // histogram samples were collected under. Empty means "default phase".
+  // The master keys per-phase HdrHistogram aggregates by this field.
+  string phase_name    = 8;
 }
 
 message StatsAck {

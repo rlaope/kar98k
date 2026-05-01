@@ -305,6 +305,11 @@ type RateUpdate struct {
 
 	TargetTps float64 `protobuf:"fixed64,1,opt,name=target_tps,json=targetTps,proto3" json:"target_tps,omitempty"`
 	Command   Command `protobuf:"varint,2,opt,name=command,proto3,enum=kar.rpc.Command" json:"command,omitempty"`
+	// PhaseName carries the active scenario phase from master to worker (#68).
+	// Empty string means "single-pattern mode". When the worker observes a
+	// change it snapshots its histograms tagged with the PREVIOUS phase
+	// before flipping.
+	PhaseName string `protobuf:"bytes,3,opt,name=phase_name,json=phaseName,proto3" json:"phase_name,omitempty"`
 }
 
 func (x *RateUpdate) Reset() {
@@ -332,6 +337,7 @@ func (x *RateUpdate) ProtoReflect() protoreflect.Message {
 
 func (x *RateUpdate) GetTargetTps() float64 { return x.TargetTps }
 func (x *RateUpdate) GetCommand() Command   { return x.Command }
+func (x *RateUpdate) GetPhaseName() string  { return x.PhaseName }
 
 // StatsPush is sent by a worker every stats_interval_ms.
 type StatsPush struct {
@@ -346,6 +352,9 @@ type StatsPush struct {
 	HdrRaw       []byte  `protobuf:"bytes,5,opt,name=hdr_raw,json=hdrRaw,proto3" json:"hdr_raw,omitempty"`
 	HdrCorrected []byte  `protobuf:"bytes,6,opt,name=hdr_corrected,json=hdrCorrected,proto3" json:"hdr_corrected,omitempty"`
 	ErrorRate    float64 `protobuf:"fixed64,7,opt,name=error_rate,json=errorRate,proto3" json:"error_rate,omitempty"`
+	// PhaseName tags this snapshot with the scenario phase its histogram
+	// samples were collected under (#68). Empty means "default phase".
+	PhaseName string `protobuf:"bytes,8,opt,name=phase_name,json=phaseName,proto3" json:"phase_name,omitempty"`
 }
 
 func (x *StatsPush) Reset() {
@@ -378,6 +387,7 @@ func (x *StatsPush) GetQueueDrops() int64    { return x.QueueDrops }
 func (x *StatsPush) GetHdrRaw() []byte       { return x.HdrRaw }
 func (x *StatsPush) GetHdrCorrected() []byte { return x.HdrCorrected }
 func (x *StatsPush) GetErrorRate() float64   { return x.ErrorRate }
+func (x *StatsPush) GetPhaseName() string    { return x.PhaseName }
 
 // StatsAck is the master's acknowledgment of a Stats stream.
 type StatsAck struct {

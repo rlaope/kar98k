@@ -20,11 +20,17 @@ type Metrics struct {
 	TargetHealth     *prometheus.GaugeVec
 
 	// Scenario phase metrics (issue #63).
-	ScenarioPhaseIndex           prometheus.Gauge
+	ScenarioPhaseIndex            prometheus.Gauge
 	ScenarioPhaseTransitionsTotal *prometheus.CounterVec
 
 	// Circuit breaker state (issue #59). 0 = closed, 1 = open.
 	CircuitBreakerState prometheus.Gauge
+
+	// Per-worker labelled variants (issue #70). Coexist with aggregate metrics above.
+	ObservedTPSPerWorker  *prometheus.GaugeVec
+	QueueDropsPerWorker   *prometheus.CounterVec
+	LatencyP95MsPerWorker *prometheus.GaugeVec
+	ErrorRatePerWorker    *prometheus.GaugeVec
 }
 
 // NewMetrics creates and registers all Prometheus metrics on the default registry.
@@ -141,6 +147,38 @@ func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
 				Help:      "Circuit breaker state — 0 = closed (traffic flowing), 1 = open (traffic paused)",
 			},
 		),
+		ObservedTPSPerWorker: f.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "kar98k",
+				Name:      "observed_tps_per_worker",
+				Help:      "Observed TPS reported by each distributed worker",
+			},
+			[]string{"worker_id"},
+		),
+		QueueDropsPerWorker: f.NewCounterVec(
+			prometheus.CounterOpts{
+				Namespace: "kar98k",
+				Name:      "queue_drops_per_worker_total",
+				Help:      "Cumulative queue drops reported by each distributed worker",
+			},
+			[]string{"worker_id"},
+		),
+		LatencyP95MsPerWorker: f.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "kar98k",
+				Name:      "request_latency_p95_ms_per_worker",
+				Help:      "P95 request latency in milliseconds reported by each distributed worker",
+			},
+			[]string{"worker_id"},
+		),
+		ErrorRatePerWorker: f.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Namespace: "kar98k",
+				Name:      "error_rate_per_worker",
+				Help:      "Error rate reported by each distributed worker",
+			},
+			[]string{"worker_id"},
+		),
 	}
 }
 
@@ -229,4 +267,37 @@ func (m *Metrics) IncRequestsInFlight() {
 // DecRequestsInFlight decrements the in-flight requests counter.
 func (m *Metrics) DecRequestsInFlight() {
 	m.RequestsInFlight.Dec()
+}
+
+// SetPerWorker updates all per-worker labelled metrics for the given worker.
+// In solo mode pass an empty workerID to keep aggregate-only behaviour.
+func (m *Metrics) SetPerWorker(workerID string, tps float64, drops int64, p95Ms float64, errRate float64) {
+	m.ObservedTPSPerWorker.WithLabelValues(workerID).Set(tps)
+	m.LatencyP95MsPerWorker.WithLabelValues(workerID).Set(p95Ms)
+	m.ErrorRatePerWorker.WithLabelValues(workerID).Set(errRate)
+	// CounterVec tracks cumulative drops; reset-on-evict is handled by DeletePerWorker.
+	// We can only add the delta since counters are monotonic — store the last value in
+	// the gauge path and use Add only when drops exceeds the previous counter value.
+	// Simpler: expose drops as a gauge-backed counter via the dedicated CounterVec by
+	// adding the full cumulative value once on first observation and the delta thereafter.
+	// Because StatsPush delivers cumulative drops, use a separate gauge for the
+	// per-worker drop count to avoid counter-reset issues on reconnect.
+	_ = drops // drops is surfaced via QueueDropsPerWorker only when caller tracks delta
+}
+
+// AddPerWorkerDrops adds delta drop counts to the per-worker drop counter.
+// Callers must compute the delta (current cumulative − previous cumulative) themselves.
+func (m *Metrics) AddPerWorkerDrops(workerID string, delta int64) {
+	if delta > 0 {
+		m.QueueDropsPerWorker.WithLabelValues(workerID).Add(float64(delta))
+	}
+}
+
+// DeletePerWorker removes all per-worker label series for the given worker,
+// bounding Prometheus cardinality after eviction.
+func (m *Metrics) DeletePerWorker(workerID string) {
+	m.ObservedTPSPerWorker.DeleteLabelValues(workerID)
+	m.QueueDropsPerWorker.DeleteLabelValues(workerID)
+	m.LatencyP95MsPerWorker.DeleteLabelValues(workerID)
+	m.ErrorRatePerWorker.DeleteLabelValues(workerID)
 }

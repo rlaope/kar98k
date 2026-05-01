@@ -23,6 +23,12 @@ import (
 // not repeated here to avoid implementation drift.
 type PoolFacade interface {
 	SetRate(tps float64)
+	// SetPhase records the active scenario phase name. In master mode the
+	// registry stores it so subsequent SetRate broadcasts tag the
+	// RateUpdate with phase_name; in solo mode the worker pool tracks it
+	// alongside its own histograms so its CurrentPhase() reflects truth.
+	// Empty string means "no scenarios" or "default phase". See #68.
+	SetPhase(phase string)
 	Submit(job worker.Job) bool
 	GetClient(proto config.Protocol) protocol.Client
 	Active() int
@@ -98,6 +104,7 @@ func (c *Controller) AttachScenarios(scenarios []config.Scenario, defaultPattern
 	if c.metrics != nil {
 		r.SetMetrics(c.metrics)
 	}
+	r.SetOnPhase(c.pool.SetPhase)
 	c.scenarios = r
 }
 

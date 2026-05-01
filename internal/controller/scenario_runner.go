@@ -23,6 +23,12 @@ type ScenarioRunner struct {
 	defaults  scenarioDefaults
 	metrics   *health.Metrics
 
+	// onPhase is called from applyPhase with the new phase name after the
+	// engine has been mutated. The Controller wires this up to PoolFacade.
+	// SetPhase so master mode broadcasts the phase to all workers and
+	// solo mode tracks it on the local pool. Nil-safe. See #68.
+	onPhase func(phaseName string)
+
 	mu          sync.RWMutex
 	current     int
 	phaseStart  time.Time
@@ -65,6 +71,25 @@ func NewScenarioRunner(
 // It is safe to call before Run; calling after Run starts is not supported.
 func (r *ScenarioRunner) SetMetrics(m *health.Metrics) {
 	r.metrics = m
+}
+
+// SetOnPhase registers a callback fired with the new phase name on every
+// applyPhase. Used by the Controller to bridge phase transitions into
+// PoolFacade.SetPhase (master broadcasts to workers; solo tracks locally).
+// Safe to call before Run; not safe to swap after Run starts.
+func (r *ScenarioRunner) SetOnPhase(fn func(string)) {
+	r.onPhase = fn
+}
+
+// CurrentPhaseName returns the active phase name, or "" before the
+// first phase has been applied. Safe to call concurrently.
+func (r *ScenarioRunner) CurrentPhaseName() string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	if r.current < 0 || r.current >= len(r.scenarios) {
+		return ""
+	}
+	return r.scenarios[r.current].Name
 }
 
 // Total returns the number of phases. Useful for status surfaces.
@@ -181,6 +206,10 @@ func (r *ScenarioRunner) applyPhase(idx int) {
 		}
 		r.metrics.RecordScenarioTransition(fromName, s.Name)
 		r.metrics.SetScenarioPhaseIndex(idx + 1)
+	}
+
+	if r.onPhase != nil {
+		r.onPhase(s.Name)
 	}
 
 	log.Printf("[scenarios] phase %d/%d %q — baseTPS=%.0f maxTPS=%.0f duration=%s",

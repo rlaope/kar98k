@@ -1,0 +1,130 @@
+version: "3.9"
+
+# TLS variant — run 'make tls-quickstart' from repo root first to generate
+# certs in examples/distributed/tls-local/.
+#
+# Usage:
+#   make tls-quickstart
+#   KAR_AUTH_TOKEN=change-me docker compose -f compose.tls.yml up --build
+#
+# The tls-local/ directory is gitignored (except .gitignore + .gitkeep).
+# NEVER reference internal/rpc/testdata/ here — those certs are for unit
+# tests only and must never ship to any environment.
+#
+# Auth token is read from the KAR_AUTH_TOKEN environment variable. Docker
+# Compose will fail fast if the variable is unset or empty (the :? syntax).
+# This prevents accidentally starting with no authentication.
+
+services:
+  echoserver:
+    build:
+      context: ../../examples/echoserver
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  master:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command:
+      - kar
+      - master
+      - --listen
+      - ":7777"
+      - --config
+      - /etc/kar/kar98k.yaml
+      - --tls-cert
+      - /etc/kar/tls/insecure.crt
+      - --tls-key
+      - /etc/kar/tls/insecure.key
+      - --auth-token-env
+      - KAR_AUTH_TOKEN
+    environment:
+      KAR_AUTH_TOKEN: "${KAR_AUTH_TOKEN:?KAR_AUTH_TOKEN must be set}"
+    ports:
+      - "7000:7000"   # dashboard
+      - "7777:7777"   # gRPC (TLS)
+    volumes:
+      - ../../configs/kar98k.yaml:/etc/kar/kar98k.yaml:ro
+      - ./tls-local:/etc/kar/tls:ro
+    depends_on:
+      echoserver:
+        condition: service_healthy
+
+  worker1:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command:
+      - kar
+      - worker
+      - --master
+      - master:7777
+      - --worker-addr
+      - worker1:9000
+      - --tls-ca
+      - /etc/kar/tls/insecure.crt
+      - --tls-server-name
+      - kar-master
+      - --auth-token-env
+      - KAR_AUTH_TOKEN
+    environment:
+      KAR_AUTH_TOKEN: "${KAR_AUTH_TOKEN:?KAR_AUTH_TOKEN must be set}"
+    volumes:
+      - ./tls-local:/etc/kar/tls:ro
+    depends_on:
+      - master
+
+  worker2:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command:
+      - kar
+      - worker
+      - --master
+      - master:7777
+      - --worker-addr
+      - worker2:9000
+      - --tls-ca
+      - /etc/kar/tls/insecure.crt
+      - --tls-server-name
+      - kar-master
+      - --auth-token-env
+      - KAR_AUTH_TOKEN
+    environment:
+      KAR_AUTH_TOKEN: "${KAR_AUTH_TOKEN:?KAR_AUTH_TOKEN must be set}"
+    volumes:
+      - ./tls-local:/etc/kar/tls:ro
+    depends_on:
+      - master
+
+  worker3:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command:
+      - kar
+      - worker
+      - --master
+      - master:7777
+      - --worker-addr
+      - worker3:9000
+      - --tls-ca
+      - /etc/kar/tls/insecure.crt
+      - --tls-server-name
+      - kar-master
+      - --auth-token-env
+      - KAR_AUTH_TOKEN
+    environment:
+      KAR_AUTH_TOKEN: "${KAR_AUTH_TOKEN:?KAR_AUTH_TOKEN must be set}"
+    volumes:
+      - ./tls-local:/etc/kar/tls:ro
+    depends_on:
+      - master

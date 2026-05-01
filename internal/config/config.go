@@ -23,7 +23,17 @@ type Config struct {
 // Master configures the gRPC listen address for distributed master mode.
 // Only used when kar is started with `kar master`.
 type Master struct {
-	Listen string `yaml:"listen,omitempty"` // e.g. ":7777"; defaults to ":7777" when empty
+	Listen    string     `yaml:"listen,omitempty"`     // e.g. ":7777"; defaults to ":7777" when empty
+	TLS       *TLSConfig `yaml:"tls,omitempty"`        // nil = plaintext (default)
+	AuthToken string     `yaml:"auth_token,omitempty"` // bearer token; empty = no auth
+}
+
+// TLSConfig holds paths to the TLS certificate, private key, and optional
+// client CA for mutual TLS. Set ClientCA to require client certificate auth.
+type TLSConfig struct {
+	Cert     string `yaml:"cert"`                // path to server certificate PEM
+	Key      string `yaml:"key"`                 // path to server private key PEM
+	ClientCA string `yaml:"client_ca,omitempty"` // path to CA PEM for mTLS; omit for one-way TLS
 }
 
 // Scenario is one phase of a multi-stage run. Phases execute strictly
@@ -108,11 +118,11 @@ const (
 
 // Controller configures the pulse controller.
 type Controller struct {
-	BaseTPS         float64           `yaml:"base_tps"`
-	MaxTPS          float64           `yaml:"max_tps"`
-	RampUpDuration  time.Duration     `yaml:"ramp_up_duration"`
-	Schedule        []ScheduleEntry   `yaml:"schedule,omitempty"`
-	ShutdownTimeout time.Duration     `yaml:"shutdown_timeout"`
+	BaseTPS         float64         `yaml:"base_tps"`
+	MaxTPS          float64         `yaml:"max_tps"`
+	RampUpDuration  time.Duration   `yaml:"ramp_up_duration"`
+	Schedule        []ScheduleEntry `yaml:"schedule,omitempty"`
+	ShutdownTimeout time.Duration   `yaml:"shutdown_timeout"`
 }
 
 // ScheduleEntry defines a time-of-day TPS multiplier.
@@ -136,8 +146,8 @@ type Pattern struct {
 // Poisson configures Poisson spike generation.
 type Poisson struct {
 	Enabled     bool          `yaml:"enabled"`
-	Lambda      float64       `yaml:"lambda"`                // Events per second (e.g., 0.1 = every 10s)
-	Interval    time.Duration `yaml:"interval,omitempty"`    // Alternative to lambda: direct interval (e.g., "2h")
+	Lambda      float64       `yaml:"lambda"`             // Events per second (e.g., 0.1 = every 10s)
+	Interval    time.Duration `yaml:"interval,omitempty"` // Alternative to lambda: direct interval (e.g., "2h")
 	SpikeFactor float64       `yaml:"spike_factor"`
 	MinInterval time.Duration `yaml:"min_interval"`
 	MaxInterval time.Duration `yaml:"max_interval"`
@@ -162,9 +172,9 @@ const (
 
 // Worker configures the worker pool.
 type Worker struct {
-	PoolSize       int           `yaml:"pool_size"`
-	QueueSize      int           `yaml:"queue_size"`
-	MaxIdleConns   int           `yaml:"max_idle_conns"`
+	PoolSize        int           `yaml:"pool_size"`
+	QueueSize       int           `yaml:"queue_size"`
+	MaxIdleConns    int           `yaml:"max_idle_conns"`
 	IdleConnTimeout time.Duration `yaml:"idle_conn_timeout"`
 }
 
@@ -210,12 +220,12 @@ type Discovery struct {
 	TargetURL       string        `yaml:"target_url"`
 	Method          string        `yaml:"method"`
 	Protocol        Protocol      `yaml:"protocol"`
-	LatencyLimitMs  int64         `yaml:"latency_limit_ms"`  // P95 latency threshold (default: 500ms)
-	ErrorRateLimit  float64       `yaml:"error_rate_limit"`  // Error rate threshold (default: 5%)
-	MinTPS          float64       `yaml:"min_tps"`           // Starting TPS (default: 10)
-	MaxTPS          float64       `yaml:"max_tps"`           // Upper bound (default: 10000)
-	StepDuration    time.Duration `yaml:"step_duration"`     // Duration per TPS step (default: 10s)
-	ConvergenceRate float64       `yaml:"convergence_rate"`  // Binary search convergence (default: 0.05 = 5%)
+	LatencyLimitMs  int64         `yaml:"latency_limit_ms"` // P95 latency threshold (default: 500ms)
+	ErrorRateLimit  float64       `yaml:"error_rate_limit"` // Error rate threshold (default: 5%)
+	MinTPS          float64       `yaml:"min_tps"`          // Starting TPS (default: 10)
+	MaxTPS          float64       `yaml:"max_tps"`          // Upper bound (default: 10000)
+	StepDuration    time.Duration `yaml:"step_duration"`    // Duration per TPS step (default: 10s)
+	ConvergenceRate float64       `yaml:"convergence_rate"` // Binary search convergence (default: 0.05 = 5%)
 }
 
 // DefaultConfig returns a configuration with sensible defaults.
@@ -230,16 +240,16 @@ func DefaultConfig() *Config {
 		Pattern: Pattern{
 			Poisson: Poisson{
 				Enabled:     true,
-				Lambda:      0.0083,              // ~2분마다 스파이크 (1/120)
-				SpikeFactor: 2.0,                 // 2배 증가 (기존 3.0에서 하향)
-				MinInterval: 1 * time.Minute,    // 최소 1분 간격
-				MaxInterval: 10 * time.Minute,   // 최대 10분 간격
+				Lambda:      0.0083,           // ~2분마다 스파이크 (1/120)
+				SpikeFactor: 2.0,              // 2배 증가 (기존 3.0에서 하향)
+				MinInterval: 1 * time.Minute,  // 최소 1분 간격
+				MaxInterval: 10 * time.Minute, // 최대 10분 간격
 				RampUp:      5 * time.Second,
 				RampDown:    10 * time.Second,
 			},
 			Noise: Noise{
 				Enabled:   true,
-				Amplitude: 0.10,                  // 10% 노이즈 (기존 15%에서 하향)
+				Amplitude: 0.10, // 10% 노이즈 (기존 15%에서 하향)
 			},
 		},
 		Worker: Worker{
