@@ -13,6 +13,7 @@ import (
 	"time"
 
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
+	"github.com/kar98k/internal/hdrbounds"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -60,7 +61,7 @@ type Metrics struct {
 func newMetrics() *Metrics {
 	return &Metrics{
 		// 1µs to 60s range, 3 significant digits
-		Histogram:   hdrhistogram.New(1, 60000000, 3),
+		Histogram:   hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
 		StatusCodes: make(map[int]int64),
 		checkMap:    make(map[string]int),
 		StartTime:   time.Now(),
@@ -80,7 +81,7 @@ func (m *Metrics) bucketFor(at time.Time) *TimeBucket {
 		bStart := m.StartTime.Add(time.Duration(len(m.TimeBuckets)) * timeBucketResolution)
 		m.TimeBuckets = append(m.TimeBuckets, &TimeBucket{
 			StartTime:   bStart,
-			Histogram:   hdrhistogram.New(1, 60000000, 3),
+			Histogram:   hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
 			StatusCodes: make(map[int]int64),
 		})
 		// Why: phase boundaries snap to bucket edges because the heatmap's

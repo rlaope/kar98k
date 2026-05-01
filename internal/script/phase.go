@@ -5,6 +5,7 @@ import (
 	"time"
 
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
+	"github.com/kar98k/internal/hdrbounds"
 	"go.starlark.net/starlark"
 )
 
@@ -23,7 +24,7 @@ func newPhaseMetrics(name string, start time.Time) *PhaseMetrics {
 	return &PhaseMetrics{
 		Name:        name,
 		StartTime:   start,
-		Histogram:   hdrhistogram.New(1, 60000000, 3),
+		Histogram:   hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
 		StatusCodes: make(map[int]int64),
 	}
 }

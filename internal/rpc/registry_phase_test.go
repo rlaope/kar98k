@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
+	"github.com/kar98k/internal/hdrbounds"
 	pb "github.com/kar98k/internal/rpc/proto"
 )
 
@@ -11,7 +12,7 @@ import (
 // samples at the given latencyMicros so tests can assert per-phase merge.
 func makePhaseHistogram(t *testing.T, latencyMicros int64, count int) []byte {
 	t.Helper()
-	h := hdrhistogram.New(BoundsMin, BoundsMax, int(BoundsSigFigs))
+	h := hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs))
 	for i := 0; i < count; i++ {
 		if err := h.RecordValue(latencyMicros); err != nil {
 			t.Fatalf("RecordValue: %v", err)

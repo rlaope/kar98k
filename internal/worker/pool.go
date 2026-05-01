@@ -10,6 +10,7 @@ import (
 
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/kar98k/internal/config"
+	"github.com/kar98k/internal/hdrbounds"
 	"github.com/kar98k/internal/health"
 	"github.com/kar98k/pkg/protocol"
 	"golang.org/x/time/rate"
@@ -26,15 +27,6 @@ const dropWarnThreshold = 0.01
 // dropWarnCooldown is the minimum gap between repeated warnings so we
 // don't spam the log when the queue stays saturated.
 const dropWarnCooldown = 5 * time.Minute
-
-// Latency histogram bounds: 1µs..60s with 3 significant digits, matching
-// internal/script/builtins.go and internal/discovery/analyzer.go so the
-// three latency surfaces stay comparable.
-const (
-	latencyHistMin    = 1
-	latencyHistMax    = 60_000_000
-	latencyHistSigFig = 3
-)
 
 // Job represents a single request job.
 type Job struct {
@@ -115,8 +107,8 @@ func NewPool(cfg config.Worker, metrics *health.Metrics) *Pool {
 		limiter:      rate.NewLimiter(rate.Limit(100), 1), // Initial rate, will be updated
 		jobs:         make(chan Job, cfg.QueueSize),
 		lastTPS:      time.Now(),
-		latRaw:       hdrhistogram.New(latencyHistMin, latencyHistMax, latencyHistSigFig),
-		latCorrected: hdrhistogram.New(latencyHistMin, latencyHistMax, latencyHistSigFig),
+		latRaw:       hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
+		latCorrected: hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
 	}
 }
 
@@ -222,10 +214,10 @@ func (p *Pool) processJob(ctx context.Context, job Job) {
 // regression is real or a measurement artifact.
 func (p *Pool) recordLatency(observed time.Duration) {
 	micros := observed.Microseconds()
-	if micros < latencyHistMin {
-		micros = latencyHistMin
-	} else if micros > latencyHistMax {
-		micros = latencyHistMax
+	if micros < hdrbounds.Min {
+		micros = hdrbounds.Min
+	} else if micros > hdrbounds.Max {
+		micros = hdrbounds.Max
 	}
 
 	expectedMicros := int64(0)

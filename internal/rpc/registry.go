@@ -8,6 +8,7 @@ import (
 
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/kar98k/internal/config"
+	"github.com/kar98k/internal/hdrbounds"
 	"github.com/kar98k/internal/health"
 	pb "github.com/kar98k/internal/rpc/proto"
 	"github.com/kar98k/internal/worker"
@@ -101,8 +102,8 @@ type WorkerRegistry struct {
 func NewWorkerRegistry(opts ...RegistryOption) *WorkerRegistry {
 	r := &WorkerRegistry{
 		workers:    make(map[string]*workerEntry),
-		globalRaw:  hdrhistogram.New(BoundsMin, BoundsMax, int(BoundsSigFigs)),
-		globalCorr: hdrhistogram.New(BoundsMin, BoundsMax, int(BoundsSigFigs)),
+		globalRaw:  hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
+		globalCorr: hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
 		stopCh:     make(chan struct{}),
 		prevDrops:  make(map[string]int64),
 		phaseRaw:   make(map[string]*hdrhistogram.Histogram),
@@ -282,7 +283,7 @@ func (r *WorkerRegistry) SetPhase(phase string) {
 func (r *WorkerRegistry) mergePhaseLocked(phaseMap map[string]*hdrhistogram.Histogram, phaseName string, snap *hdrhistogram.Histogram) {
 	h, ok := phaseMap[phaseName]
 	if !ok {
-		h = hdrhistogram.New(BoundsMin, BoundsMax, int(BoundsSigFigs))
+		h = hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs))
 		phaseMap[phaseName] = h
 	}
 	h.Merge(snap)

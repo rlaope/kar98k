@@ -5,16 +5,7 @@ import (
 	"time"
 
 	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
-)
-
-// Histogram bounds: latencies are recorded in microseconds with three
-// significant digits, matching internal/script/builtins.go. The 1µs..60s
-// range covers everything from sub-ms in-memory targets to long timeouts
-// without requiring resizing.
-const (
-	hdrMin    = 1
-	hdrMax    = 60_000_000
-	hdrSigFig = 3
+	"github.com/kar98k/internal/hdrbounds"
 )
 
 // Analyzer collects and analyzes real-time latency / error metrics for
@@ -39,8 +30,8 @@ type Analyzer struct {
 // NewAnalyzer creates a new Analyzer.
 func NewAnalyzer() *Analyzer {
 	return &Analyzer{
-		window: hdrhistogram.New(hdrMin, hdrMax, hdrSigFig),
-		total:  hdrhistogram.New(hdrMin, hdrMax, hdrSigFig),
+		window: hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
+		total:  hdrhistogram.New(hdrbounds.Min, hdrbounds.Max, int(hdrbounds.SigFigs)),
 	}
 }
 
@@ -51,10 +42,10 @@ func (a *Analyzer) RecordLatency(latencyMs float64, isError bool) {
 	defer a.mu.Unlock()
 
 	micros := int64(latencyMs * 1000)
-	if micros < hdrMin {
-		micros = hdrMin
-	} else if micros > hdrMax {
-		micros = hdrMax
+	if micros < hdrbounds.Min {
+		micros = hdrbounds.Min
+	} else if micros > hdrbounds.Max {
+		micros = hdrbounds.Max
 	}
 
 	_ = a.window.RecordValue(micros)
