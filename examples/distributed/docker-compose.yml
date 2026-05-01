@@ -1,0 +1,52 @@
+version: "3.9"
+
+services:
+  echoserver:
+    build:
+      context: ../../examples/echoserver
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8080/health"]
+      interval: 2s
+      timeout: 2s
+      retries: 10
+
+  master:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command: ["kar", "master", "--listen", ":7777", "--config", "/etc/kar/kar98k.yaml"]
+    ports:
+      - "7000:7000"   # dashboard
+      - "7777:7777"   # gRPC
+    volumes:
+      - ../../configs/kar98k.yaml:/etc/kar/kar98k.yaml:ro
+    depends_on:
+      echoserver:
+        condition: service_healthy
+
+  worker1:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command: ["kar", "worker", "--master", "master:7777", "--worker-addr", "worker1:9000"]
+    depends_on:
+      - master
+
+  worker2:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command: ["kar", "worker", "--master", "master:7777", "--worker-addr", "worker2:9000"]
+    depends_on:
+      - master
+
+  worker3:
+    build:
+      context: ../..
+      dockerfile: examples/distributed/Dockerfile
+    command: ["kar", "worker", "--master", "master:7777", "--worker-addr", "worker3:9000"]
+    depends_on:
+      - master

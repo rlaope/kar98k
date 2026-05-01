@@ -201,6 +201,14 @@ tr:hover { background: #1a1a1a; }
         </tbody>
       </table>
     </div>
+    <div class="panel" id="workers-panel" style="display:none">
+      <h3>Workers</h3>
+      <div class="desc">Distributed worker fleet. Updates every 2s.</div>
+      <table>
+        <thead><tr><th>ID</th><th>Addr</th><th style="text-align:right">TPS</th><th style="text-align:right">Drops</th><th style="text-align:right">Err%</th><th style="text-align:right">Beat</th></tr></thead>
+        <tbody id="workers-body"><tr><td colspan="6" class="dim">No workers</td></tr></tbody>
+      </table>
+    </div>
   </div>
 </div>
 
@@ -434,6 +442,34 @@ function loadForecast() {
 }
 loadForecast();
 setInterval(loadForecast, 60000);
+
+function loadWorkers() {
+  fetch('/api/workers').then(r=>{
+    if(r.status===501){return null;}
+    return r.json();
+  }).then(rows=>{
+    if(!rows) return;
+    const panel=document.getElementById('workers-panel');
+    panel.style.display='';
+    const tbody=document.getElementById('workers-body');
+    if(!rows.length){
+      tbody.innerHTML='<tr><td colspan="6" class="dim">No workers</td></tr>';
+      return;
+    }
+    tbody.innerHTML=rows.map(w=>{
+      const beat=w.last_beat_ago_sec.toFixed(1)+'s';
+      const err=(w.error_rate*100).toFixed(1)+'%';
+      const errCls=w.error_rate>0.05?'style="color:#f87171"':w.error_rate>0?'style="color:#fbbf24"':'';
+      return '<tr><td class="mono">'+w.id+'</td><td class="mono">'+w.addr+'</td>'
+        +'<td style="text-align:right" class="mono">'+w.current_tps.toFixed(1)+'</td>'
+        +'<td style="text-align:right" class="mono">'+w.drops+'</td>'
+        +'<td style="text-align:right" class="mono" '+errCls+'>'+err+'</td>'
+        +'<td style="text-align:right" class="mono">'+beat+'</td></tr>';
+    }).join('');
+  });
+}
+loadWorkers();
+setInterval(loadWorkers, 2000);
 </script>
 </body>
 </html>`

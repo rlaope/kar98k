@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	hdrhistogram "github.com/HdrHistogram/hdrhistogram-go"
 	"github.com/kar98k/internal/config"
 	"github.com/kar98k/internal/health"
 	"github.com/prometheus/client_golang/prometheus"
@@ -212,5 +213,52 @@ func TestLatencyPercentile_EmptyReturnsZero(t *testing.T) {
 	}
 	if got := p.LatencyPercentile(99, true); got != 0 {
 		t.Fatalf("empty corrected P99 = %v, want 0", got)
+	}
+}
+
+func TestSnapshotAndResetHistograms(t *testing.T) {
+	p := newTestPool(t)
+	p.SetRate(100) // 10ms expected interval
+
+	const nSamples = 50
+	for i := 0; i < nSamples; i++ {
+		p.recordLatency(5 * time.Millisecond)
+	}
+
+	rawN, corrN := p.LatencySamples()
+	if rawN != nSamples {
+		t.Fatalf("before snapshot: raw count = %d, want %d", rawN, nSamples)
+	}
+	if corrN != nSamples {
+		t.Fatalf("before snapshot: corrected count = %d, want %d", corrN, nSamples)
+	}
+
+	rawBytes, corrBytes, err := p.SnapshotAndResetHistograms()
+	if err != nil {
+		t.Fatalf("SnapshotAndResetHistograms: %v", err)
+	}
+	if len(rawBytes) == 0 {
+		t.Fatal("rawBytes is empty")
+	}
+	if len(corrBytes) == 0 {
+		t.Fatal("corrBytes is empty")
+	}
+
+	// Histograms must be zeroed after snapshot.
+	rawN2, corrN2 := p.LatencySamples()
+	if rawN2 != 0 {
+		t.Fatalf("after snapshot: raw count = %d, want 0", rawN2)
+	}
+	if corrN2 != 0 {
+		t.Fatalf("after snapshot: corrected count = %d, want 0", corrN2)
+	}
+
+	// Decode the snapshot and verify sample count matches what we recorded.
+	decoded, decErr := hdrhistogram.Decode(rawBytes)
+	if decErr != nil {
+		t.Fatalf("Decode rawBytes: %v", decErr)
+	}
+	if decoded.TotalCount() != nSamples {
+		t.Fatalf("decoded raw count = %d, want %d", decoded.TotalCount(), nSamples)
 	}
 }

@@ -116,7 +116,7 @@ func runQuickstart(cmd *cobra.Command, args []string) error {
 	fmt.Printf("  Noise:   ±%.0f%%\n", p.Noise*100)
 	fmt.Println()
 
-	d, err := daemon.New(cfg)
+	d, err := daemon.New(cfg, daemon.ModeSolo)
 	if err != nil {
 		return fmt.Errorf("failed to create daemon: %w", err)
 	}

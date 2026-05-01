@@ -56,7 +56,7 @@ func runRun(cmd *cobra.Command, args []string) error {
 	fmt.Println()
 
 	// Create daemon
-	d, err := daemon.New(cfg)
+	d, err := daemon.New(cfg, daemon.ModeSolo)
 	if err != nil {
 		return fmt.Errorf("failed to create daemon: %w", err)
 	}

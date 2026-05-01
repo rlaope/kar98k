@@ -98,6 +98,8 @@ func Execute() {
 func init() {
 	rootCmd.CompletionOptions.DisableDefaultCmd = true
 	rootCmd.AddCommand(versionCmd)
+	rootCmd.AddCommand(masterCmd)
+	rootCmd.AddCommand(workerCmd)
 }
 
 // SetVersion sets the version info

@@ -81,6 +81,17 @@ docker-up:
 docker-down:
 	docker-compose down
 
+## proto-deps: Install pinned protoc-gen-go + protoc-gen-go-grpc
+proto-deps:
+	$(GO) install google.golang.org/protobuf/cmd/protoc-gen-go@v1.34.2
+	$(GO) install google.golang.org/grpc/cmd/protoc-gen-go-grpc@v1.5.1
+
+## proto: Regenerate gRPC code from kar.proto (requires protoc binary + plugins from proto-deps)
+proto: proto-deps
+	protoc --go_out=. --go_opt=paths=source_relative \
+	       --go-grpc_out=. --go-grpc_opt=paths=source_relative \
+	       internal/rpc/proto/kar.proto
+
 ## deps: Download dependencies
 deps:
 	$(GO) mod download

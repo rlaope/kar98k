@@ -3,15 +3,37 @@ package controller
 import (
 	"context"
 	"log"
-	"math/rand"
 	"sync"
 	"time"
 
 	"github.com/kar98k/internal/config"
 	"github.com/kar98k/internal/health"
 	"github.com/kar98k/internal/pattern"
+	"github.com/kar98k/internal/targets"
 	"github.com/kar98k/internal/worker"
+	"github.com/kar98k/pkg/protocol"
 )
+
+// PoolFacade is the subset of *worker.Pool that the controller and
+// daemon use. Splitting it out allows the master-mode WorkerRegistry
+// (internal/rpc) to satisfy the same seam without a local pool.
+//
+// Methods used by the circuit breaker (ErrorRate, Pause, Resume) are
+// kept in the existing breakerPool interface in breaker.go; they are
+// not repeated here to avoid implementation drift.
+type PoolFacade interface {
+	SetRate(tps float64)
+	Submit(job worker.Job) bool
+	GetClient(proto config.Protocol) protocol.Client
+	Active() int
+	QueueSize() int
+	TotalDrops() int64
+	DropRate() float64
+	LatencyPercentile(percentile float64, corrected bool) float64
+}
+
+// compile-time assertion that *worker.Pool satisfies PoolFacade.
+var _ PoolFacade = (*worker.Pool)(nil)
 
 // Controller orchestrates traffic generation.
 type Controller struct {
@@ -19,43 +41,49 @@ type Controller struct {
 	targets   []config.Target
 	engine    *pattern.Engine
 	scheduler *Scheduler
-	pool      *worker.Pool
+	pool      PoolFacade
 	checker   *health.Checker
 	metrics   *health.Metrics
 	scenarios *ScenarioRunner
 	breaker   *CircuitBreaker
-
-	// Weighted target selection
-	weightedTargets []config.Target
-	totalWeight     int
-	rng             *rand.Rand
+	submitter Submitter
+	picker    *targets.Picker
 
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
-	mu     sync.RWMutex
 }
 
-// NewController creates a new controller.
+// NewController creates a new controller. Pass submitter to choose
+// between solo (LocalSubmitter) and master (NoopSubmitter) job
+// generation. A nil submitter defaults to LocalSubmitter so existing
+// solo-mode call-sites stay backward compatible.
 func NewController(
 	cfg config.Controller,
-	targets []config.Target,
+	tgts []config.Target,
 	engine *pattern.Engine,
-	pool *worker.Pool,
+	pool PoolFacade,
 	checker *health.Checker,
 	metrics *health.Metrics,
+	submitter Submitter,
 ) *Controller {
 	c := &Controller{
 		cfg:       cfg,
-		targets:   targets,
+		targets:   tgts,
 		engine:    engine,
 		scheduler: NewScheduler(cfg.Schedule),
 		pool:      pool,
 		checker:   checker,
 		metrics:   metrics,
-		rng:       rand.New(rand.NewSource(time.Now().UnixNano())),
+		picker:    targets.New(tgts),
 	}
-
-	c.buildWeightedTargets()
+	if submitter == nil {
+		submitter = &LocalSubmitter{c: c}
+	} else if ls, ok := submitter.(*LocalSubmitter); ok && ls.c == nil {
+		// Why: callers pass &LocalSubmitter{} as a marker; bind it now
+		// so its Run can reach generateLoop without exposing internals.
+		ls.c = c
+	}
+	c.submitter = submitter
 	return c
 }
 
@@ -75,12 +103,13 @@ func (c *Controller) AttachScenarios(scenarios []config.Scenario, defaultPattern
 
 // AttachSafety opts the controller into circuit-breaker mode. When
 // safety.Enabled is false the call is a no-op and the breaker
-// goroutine never runs.
-func (c *Controller) AttachSafety(safety config.Safety) {
-	if !safety.Enabled {
+// goroutine never runs. pool must be the concrete *worker.Pool; the
+// breaker is not meaningful in master mode and should be skipped there.
+func (c *Controller) AttachSafety(safety config.Safety, pool *worker.Pool) {
+	if !safety.Enabled || pool == nil {
 		return
 	}
-	c.breaker = NewCircuitBreaker(safety, c.pool, c.metrics)
+	c.breaker = NewCircuitBreaker(safety, pool, c.metrics)
 }
 
 // ManualResume forwards to the breaker so `kar resume` can clear an
@@ -94,39 +123,6 @@ func (c *Controller) ManualResume() {
 // tripped. Returns (false, zero-time) when safety is disabled.
 func (c *Controller) BreakerOpen() (bool, time.Time) {
 	return c.breaker.State()
-}
-
-// buildWeightedTargets creates a weighted list for random selection.
-func (c *Controller) buildWeightedTargets() {
-	c.weightedTargets = nil
-	c.totalWeight = 0
-
-	for _, t := range c.targets {
-		c.totalWeight += t.Weight
-		c.weightedTargets = append(c.weightedTargets, t)
-	}
-}
-
-// selectTarget picks a target based on weights.
-func (c *Controller) selectTarget() config.Target {
-	c.mu.RLock()
-	defer c.mu.RUnlock()
-
-	if len(c.weightedTargets) == 0 {
-		return config.Target{}
-	}
-
-	r := c.rng.Intn(c.totalWeight)
-	cumulative := 0
-
-	for _, t := range c.weightedTargets {
-		cumulative += t.Weight
-		if r < cumulative {
-			return t
-		}
-	}
-
-	return c.weightedTargets[0]
 }
 
 // Start begins traffic generation.
@@ -143,9 +139,14 @@ func (c *Controller) Start(ctx context.Context) {
 	c.wg.Add(1)
 	go c.controlLoop(ctx)
 
-	// Request generation loop
+	// Job generation strategy — LocalSubmitter runs the per-ms loop in
+	// solo mode; NoopSubmitter returns immediately in master mode where
+	// the WorkerRegistry fans rate out to remote workers instead.
 	c.wg.Add(1)
-	go c.generateLoop(ctx)
+	go func() {
+		defer c.wg.Done()
+		c.submitter.Run(ctx)
+	}()
 
 	// Scenario timeline (multi-phase runs only).
 	if c.scenarios != nil {
@@ -233,9 +234,9 @@ func (c *Controller) updateTPS() {
 }
 
 // generateLoop continuously submits jobs to the worker pool.
+// Why: invoked by LocalSubmitter.Run inside a goroutine that already
+// owns wg.Done — this loop must NOT decrement the wg itself.
 func (c *Controller) generateLoop(ctx context.Context) {
-	defer c.wg.Done()
-
 	// Use a ticker that fires at a high rate
 	// The actual TPS is controlled by the rate limiter in the pool
 	ticker := time.NewTicker(time.Millisecond)
@@ -262,8 +263,8 @@ func (c *Controller) submitJobs(ctx context.Context) {
 		default:
 		}
 
-		target := c.selectTarget()
-		if target.Name == "" {
+		target := c.picker.Pick()
+		if target == nil {
 			continue
 		}
 
@@ -273,7 +274,7 @@ func (c *Controller) submitJobs(ctx context.Context) {
 		}
 
 		job := worker.Job{
-			Target: target,
+			Target: *target,
 			Client: c.pool.GetClient(target.Protocol),
 		}
 
@@ -325,7 +326,7 @@ type Status struct {
 func (c *Controller) GetStatus() Status {
 	schedInfo := c.scheduler.GetInfo()
 
-	return Status{
+	st := Status{
 		BaseTPS:             c.cfg.BaseTPS,
 		MaxTPS:              c.cfg.MaxTPS,
 		ScheduleMultiplier:  schedInfo.CurrentMultiplier,
@@ -339,6 +340,12 @@ func (c *Controller) GetStatus() Status {
 		LatencyP95Corrected: c.pool.LatencyPercentile(95, true),
 		LatencyP99Corrected: c.pool.LatencyPercentile(99, true),
 		PatternStatus:       c.engine.GetStatus(),
-		Scenario:            c.scenarios.Status(),
 	}
+	// Why: in master mode AttachScenarios is sometimes skipped, leaving
+	// c.scenarios nil. Calling Status on the nil pointer is safe today
+	// but the explicit guard documents the contract.
+	if c.scenarios != nil {
+		st.Scenario = c.scenarios.Status()
+	}
+	return st
 }

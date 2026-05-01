@@ -1,0 +1,75 @@
+syntax = "proto3";
+
+package kar.rpc;
+
+option go_package = "github.com/kar98k/internal/rpc/proto";
+
+service KarMaster {
+  rpc Register(RegisterReq) returns (RegisterResp);
+  rpc RateUpdates(RateSubscribeReq) returns (stream RateUpdate);
+  rpc Stats(stream StatsPush) returns (StatsAck);
+}
+
+message HistogramBounds {
+  int64  min_value  = 1;
+  int64  max_value  = 2;
+  int32  sig_figs   = 3;
+}
+
+message TargetSpec {
+  string name     = 1;
+  string url      = 2;
+  string protocol = 3;
+  string method   = 4;
+  int32  weight   = 5;
+  int64  timeout_ms = 6;
+}
+
+message WorkerPoolConfig {
+  int32 pool_size  = 1;
+  int32 queue_size = 2;
+}
+
+message RegisterReq {
+  string          worker_addr    = 1;
+  string          version        = 2;
+  uint64          capacity_hint  = 3;
+  HistogramBounds bounds         = 4;
+}
+
+message RegisterResp {
+  string         worker_id        = 1;
+  repeated TargetSpec targets     = 2;
+  WorkerPoolConfig pool           = 3;
+  uint32          stats_interval_ms = 4;
+}
+
+message RateSubscribeReq {
+  string worker_id = 1;
+}
+
+enum Command {
+  NONE  = 0;
+  START = 1;
+  STOP  = 2;
+  DRAIN = 3;
+}
+
+message RateUpdate {
+  double  target_tps = 1;
+  Command command    = 2;
+}
+
+message StatsPush {
+  string worker_id     = 1;
+  uint64 timestamp     = 2;
+  double observed_tps  = 3;
+  int64  queue_drops   = 4;
+  bytes  hdr_raw       = 5;
+  bytes  hdr_corrected = 6;
+  double error_rate    = 7;
+}
+
+message StatsAck {
+  bool ok = 1;
+}

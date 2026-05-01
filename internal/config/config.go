@@ -12,11 +12,18 @@ type Config struct {
 	Metrics    Metrics    `yaml:"metrics"`
 	Safety     Safety     `yaml:"safety,omitempty"`
 	Dashboard  Dashboard  `yaml:"dashboard,omitempty"`
+	Master     Master     `yaml:"master,omitempty"`
 	// Scenarios optionally defines a sequence of phases (warmup,
 	// baseline, spike-train, soak, cooldown, etc.) that the controller
 	// advances through on a wall-clock timeline. When empty, the
 	// controller uses the single Pattern block above as before.
 	Scenarios []Scenario `yaml:"scenarios,omitempty"`
+}
+
+// Master configures the gRPC listen address for distributed master mode.
+// Only used when kar is started with `kar master`.
+type Master struct {
+	Listen string `yaml:"listen,omitempty"` // e.g. ":7777"; defaults to ":7777" when empty
 }
 
 // Scenario is one phase of a multi-stage run. Phases execute strictly

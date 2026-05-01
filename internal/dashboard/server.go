@@ -54,6 +54,10 @@ type Server struct {
 	// this to a closure over controller.ForecastTimeline; script mode
 	// leaves it nil so the endpoint returns 501.
 	forecastSrc ForecastSource
+
+	// workerSrc, when set, powers /api/workers. Master mode wires this
+	// to registry.Snapshot; solo/script mode leaves it nil (returns 501).
+	workerSrc WorkerSource
 }
 
 // ForecastPoint is one sample on the dashboard forecast curve. Kept
@@ -71,6 +75,19 @@ type ForecastPoint struct {
 // it lazily on each /api/forecast request so callers can return
 // up-to-date results when config reloads.
 type ForecastSource func() []ForecastPoint
+
+// WorkerRow is a snapshot of one distributed worker's state.
+type WorkerRow struct {
+	ID             string  `json:"id"`
+	Addr           string  `json:"addr"`
+	LastBeatAgoSec float64 `json:"last_beat_ago_sec"`
+	CurrentTPS     float64 `json:"current_tps"`
+	Drops          int64   `json:"drops"`
+	ErrorRate      float64 `json:"error_rate"`
+}
+
+// WorkerSource returns the current worker snapshot for /api/workers.
+type WorkerSource func() []WorkerRow
 
 // New creates a new dashboard server.
 func New(addr string) *Server {
@@ -99,6 +116,12 @@ func (s *Server) SetForecastSource(src ForecastSource) {
 	s.forecastSrc = src
 }
 
+// SetWorkerSource wires the optional /api/workers endpoint. Master mode
+// passes registry.Snapshot; solo/script mode leaves it nil (returns 501).
+func (s *Server) SetWorkerSource(src WorkerSource) {
+	s.workerSrc = src
+}
+
 // SetRunning updates the running state.
 func (s *Server) SetRunning(running bool) {
 	s.mu.Lock()
@@ -117,6 +140,7 @@ func (s *Server) Start() error {
 	mux.HandleFunc("/api/stop", s.handleStop)
 	mux.HandleFunc("/api/state", s.handleState)
 	mux.HandleFunc("/api/forecast", s.handleForecast)
+	mux.HandleFunc("/api/workers", s.handleWorkers)
 
 	server := &http.Server{
 		Addr:    s.addr,
@@ -272,6 +296,18 @@ func (s *Server) handleForecast(w http.ResponseWriter, r *http.Request) {
 	points := s.forecastSrc()
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(points)
+}
+
+// handleWorkers returns the per-worker snapshot as JSON. Returns 501
+// when no source is wired (solo/script mode).
+func (s *Server) handleWorkers(w http.ResponseWriter, r *http.Request) {
+	if s.workerSrc == nil {
+		http.Error(w, "workers endpoint not configured", http.StatusNotImplemented)
+		return
+	}
+	rows := s.workerSrc()
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(rows)
 }
 
 func (s *Server) handleState(w http.ResponseWriter, r *http.Request) {

@@ -15,6 +15,7 @@ import (
 	"github.com/kar98k/internal/dashboard"
 	"github.com/kar98k/internal/health"
 	"github.com/kar98k/internal/pattern"
+	"github.com/kar98k/internal/rpc"
 	"github.com/kar98k/internal/worker"
 )
 
@@ -22,6 +23,15 @@ const (
 	SocketName = "kar98k.sock"
 	PidFile    = "kar98k.pid"
 	LogFile    = "kar98k.log"
+)
+
+// Mode selects the daemon's operating mode.
+type Mode int
+
+const (
+	ModeSolo   Mode = iota // default: single-process, local pool
+	ModeMaster             // distributed master: gRPC server + WorkerRegistry as PoolFacade
+	ModeWorker             // distributed worker: no controller, no dashboard
 )
 
 // Status represents the current daemon status
@@ -71,14 +81,21 @@ type Response struct {
 
 // Daemon manages the kar98k service
 type Daemon struct {
-	cfg        *config.Config
-	ctrl       *controller.Controller
-	pool       *worker.Pool
-	checker    *health.Checker
-	metrics    *health.Metrics
-	engine     *pattern.Engine
+	cfg           *config.Config
+	mode          Mode
+	ctrl          *controller.Controller
+	pool          *worker.Pool
+	registry      *rpc.WorkerRegistry
+	grpcServer    *rpc.GRPCServer
+	checker       *health.Checker
+	metrics       *health.Metrics
+	engine        *pattern.Engine
 	metricsServer *health.Server
-	dashboard  *dashboard.Server
+	dashboard     *dashboard.Server
+
+	// workerSnapshotFn is set by startMaster() and wired into the dashboard
+	// after dashboard init in Start(). Nil in solo/worker mode.
+	workerSnapshotFn func() []dashboard.WorkerRow
 
 	status     Status
 	mu         sync.RWMutex
@@ -113,8 +130,8 @@ func GetLogPath() string {
 	return filepath.Join(GetRuntimeDir(), LogFile)
 }
 
-// New creates a new daemon instance
-func New(cfg *config.Config) (*Daemon, error) {
+// New creates a new daemon instance operating in the given mode.
+func New(cfg *config.Config, mode Mode) (*Daemon, error) {
 	runtimeDir := GetRuntimeDir()
 	if err := os.MkdirAll(runtimeDir, 0755); err != nil {
 		return nil, fmt.Errorf("failed to create runtime directory: %w", err)
@@ -129,6 +146,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 
 	d := &Daemon{
 		cfg:        cfg,
+		mode:       mode,
 		ctx:        ctx,
 		cancel:     cancel,
 		socketPath: GetSocketPath(),
@@ -143,7 +161,7 @@ func New(cfg *config.Config) (*Daemon, error) {
 
 // Start starts the daemon
 func (d *Daemon) Start() error {
-	d.log("Starting kar98k daemon...")
+	d.log("Starting kar98k daemon (mode=%d)...", d.mode)
 
 	// Write PID file
 	if err := os.WriteFile(GetPidPath(), []byte(fmt.Sprintf("%d", os.Getpid())), 0644); err != nil {
@@ -160,19 +178,18 @@ func (d *Daemon) Start() error {
 		return fmt.Errorf("failed to create socket: %w", err)
 	}
 
-	// Initialize components
 	d.metrics = health.NewMetrics()
 	d.engine = pattern.NewEngine(d.cfg.Pattern, d.cfg.Controller.BaseTPS, d.cfg.Controller.MaxTPS)
-	d.pool = worker.NewPool(d.cfg.Worker, d.metrics)
-	d.checker = health.NewChecker(d.cfg.Health, d.cfg.Targets, d.metrics)
-	d.ctrl = controller.NewController(d.cfg.Controller, d.cfg.Targets, d.engine, d.pool, d.checker, d.metrics)
-	d.ctrl.AttachScenarios(d.cfg.Scenarios, d.cfg.Pattern)
-	d.ctrl.AttachSafety(d.cfg.Safety)
 
-	// Optional web dashboard for daemon mode (#58 foundation). Wires
-	// /api/forecast to controller.ForecastTimeline so the dashboard
-	// shows the same curve `kar simulate` would produce. The HTML
-	// panel that consumes this endpoint lands in a follow-up issue.
+	if d.mode == ModeMaster {
+		if err := d.startMaster(); err != nil {
+			return err
+		}
+	} else {
+		d.startSolo()
+	}
+
+	// Optional web dashboard
 	if d.cfg.Dashboard.Enabled {
 		addr := d.cfg.Dashboard.Address
 		if addr == "" {
@@ -180,10 +197,13 @@ func (d *Daemon) Start() error {
 		}
 		d.dashboard = dashboard.New(addr)
 		d.dashboard.SetForecastSource(d.buildForecast)
+		if d.workerSnapshotFn != nil {
+			d.dashboard.SetWorkerSource(d.workerSnapshotFn)
+		}
 		d.dashboard.Start()
 	}
 
-	// Start metrics server
+	// Metrics server
 	if d.cfg.Metrics.Enabled {
 		d.metricsServer = health.NewServer(d.cfg.Metrics)
 		go func() {
@@ -200,10 +220,62 @@ func (d *Daemon) Start() error {
 	}
 
 	d.log("Daemon started, waiting for trigger...")
-
-	// Accept connections
 	go d.acceptConnections()
+	return nil
+}
 
+// startSolo initialises the single-process (default) path.
+func (d *Daemon) startSolo() {
+	d.pool = worker.NewPool(d.cfg.Worker, d.metrics)
+	d.checker = health.NewChecker(d.cfg.Health, d.cfg.Targets, d.metrics)
+	d.ctrl = controller.NewController(d.cfg.Controller, d.cfg.Targets, d.engine, d.pool, d.checker, d.metrics, &controller.LocalSubmitter{})
+	d.ctrl.AttachScenarios(d.cfg.Scenarios, d.cfg.Pattern)
+	d.ctrl.AttachSafety(d.cfg.Safety, d.pool)
+}
+
+// startMaster initialises the distributed-master path: gRPC server +
+// WorkerRegistry as PoolFacade; no local pool or health checker.
+func (d *Daemon) startMaster() error {
+	d.registry = rpc.NewWorkerRegistry()
+	d.checker = health.NewChecker(d.cfg.Health, d.cfg.Targets, d.metrics)
+	d.ctrl = controller.NewController(d.cfg.Controller, d.cfg.Targets, d.engine, d.registry, d.checker, d.metrics, controller.NoopSubmitter{})
+	d.ctrl.AttachScenarios(d.cfg.Scenarios, d.cfg.Pattern)
+
+	listen := d.cfg.Master.Listen
+	if listen == "" {
+		listen = ":7777"
+	}
+	grpcSrv, err := rpc.NewGRPCServer(listen, d.registry)
+	if err != nil {
+		return fmt.Errorf("gRPC server: %w", err)
+	}
+	d.grpcServer = grpcSrv
+	go func() {
+		if err := grpcSrv.Serve(); err != nil {
+			d.log("gRPC server stopped: %v", err)
+		}
+	}()
+	d.log("gRPC master listening on %s", listen)
+
+	// Wire worker snapshot into dashboard when it starts (after this func returns).
+	// We store the closure now; dashboard.SetWorkerSource is called in Start() after
+	// startMaster() completes, so d.dashboard may still be nil here — we defer via
+	// a hook applied in Start() after dashboard init.
+	d.workerSnapshotFn = func() []dashboard.WorkerRow {
+		rows := d.registry.Snapshot()
+		out := make([]dashboard.WorkerRow, len(rows))
+		for i, r := range rows {
+			out[i] = dashboard.WorkerRow{
+				ID:             r.ID,
+				Addr:           r.Addr,
+				LastBeatAgoSec: r.LastBeatAgoSec,
+				CurrentTPS:     r.CurrentTPS,
+				Drops:          r.Drops,
+				ErrorRate:      r.ErrorRate,
+			}
+		}
+		return out
+	}
 	return nil
 }
 
@@ -221,7 +293,9 @@ func (d *Daemon) Trigger() {
 	d.log("Target: %s (%s)", d.status.TargetURL, d.status.Protocol)
 	d.log("Base TPS: %.0f, Max TPS: %.0f", d.cfg.Controller.BaseTPS, d.cfg.Controller.MaxTPS)
 
-	d.pool.Start(d.ctx)
+	if d.pool != nil {
+		d.pool.Start(d.ctx)
+	}
 	d.checker.Start(d.ctx)
 	d.ctrl.Start(d.ctx)
 
@@ -280,6 +354,16 @@ func (d *Daemon) GetStatus() Status {
 // Stop stops the daemon
 func (d *Daemon) Stop() {
 	d.log("Stopping daemon...")
+
+	// gRPC server must stop before controller so in-flight RPCs finish.
+	// Order: stop accepting RPCs → stop registry sweeper → cancel context
+	// → tear down controller (whose goroutines observe the cancel).
+	if d.grpcServer != nil {
+		d.grpcServer.Stop()
+	}
+	if d.registry != nil {
+		d.registry.Stop()
+	}
 
 	d.cancel()
 

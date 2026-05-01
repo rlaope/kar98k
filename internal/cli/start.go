@@ -190,7 +190,7 @@ func startDaemon(cfg *config.Config) error {
 	// For simplicity, we'll run in foreground mode here
 	// In production, you'd fork to background
 
-	d, err := daemon.New(cfg)
+	d, err := daemon.New(cfg, daemon.ModeSolo)
 	if err != nil {
 		return err
 	}

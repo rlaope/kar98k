@@ -473,6 +473,29 @@ func (p *Pool) LatencySamples() (rawN, correctedN int64) {
 	return p.latRaw.TotalCount(), p.latCorrected.TotalCount()
 }
 
+// SnapshotAndResetHistograms encodes both latency histograms to their
+// wire format (HdrHistogram V2 compressed) and resets them to zero.
+// The snapshot is atomic with respect to recordLatency — no samples are
+// lost or double-counted across concurrent calls.
+func (p *Pool) SnapshotAndResetHistograms() (rawBytes, corrBytes []byte, err error) {
+	p.latMu.Lock()
+	defer p.latMu.Unlock()
+
+	rawBytes, err = p.latRaw.Encode(hdrhistogram.V2CompressedEncodingCookieBase)
+	if err != nil {
+		return nil, nil, err
+	}
+	p.latRaw.Reset()
+
+	corrBytes, err = p.latCorrected.Encode(hdrhistogram.V2CompressedEncodingCookieBase)
+	if err != nil {
+		return nil, nil, err
+	}
+	p.latCorrected.Reset()
+
+	return rawBytes, corrBytes, nil
+}
+
 // Stop gracefully stops the worker pool.
 func (p *Pool) Stop() {
 	if p.cancel != nil {

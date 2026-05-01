@@ -83,7 +83,7 @@ func runDemo(cmd *cobra.Command, args []string) error {
 	// Checker is intentionally nil: the demo target lives in this process,
 	// so probing it adds latency for no information. Controller.submitJobs
 	// treats nil checker as "always healthy".
-	ctrl := controller.NewController(cfg.Controller, cfg.Targets, engine, pool, nil, metrics)
+	ctrl := controller.NewController(cfg.Controller, cfg.Targets, engine, pool, nil, metrics, nil)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
