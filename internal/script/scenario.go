@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/kar98k/internal/config"
 	"go.starlark.net/starlark"
 )
 
@@ -15,6 +16,7 @@ type ScenarioConfig struct {
 	Thresholds map[string]string
 	VUs        int
 	Duration   time.Duration
+	Inject     []config.InjectStep
 }
 
 // ChaosConfig configures kar98k's chaos traffic patterns.

@@ -12,16 +12,25 @@ import (
 
 // jsonReport is the full metrics payload written to JSON output.
 type jsonReport struct {
-	Scenario   string             `json:"scenario"`
-	Duration   string             `json:"duration"`
-	Requests   int64              `json:"total_requests"`
-	Errors     int64              `json:"total_errors"`
-	SuccessRate float64           `json:"success_rate"`
-	RPS        float64            `json:"rps"`
-	Latency    jsonLatency        `json:"latency"`
-	Checks     []jsonCheck        `json:"checks"`
-	Thresholds []jsonThreshold    `json:"thresholds"`
-	StatusCodes map[string]int64  `json:"status_codes"`
+	Scenario    string           `json:"scenario"`
+	Duration    string           `json:"duration"`
+	Requests    int64            `json:"total_requests"`
+	Errors      int64            `json:"total_errors"`
+	SuccessRate float64          `json:"success_rate"`
+	RPS         float64          `json:"rps"`
+	Latency     jsonLatency      `json:"latency"`
+	Checks      []jsonCheck      `json:"checks"`
+	Thresholds  []jsonThreshold  `json:"thresholds"`
+	StatusCodes map[string]int64 `json:"status_codes"`
+	Phases      []jsonPhase      `json:"phases,omitempty"`
+}
+
+type jsonPhase struct {
+	Name       string      `json:"name"`
+	DurationMs float64     `json:"duration_ms"`
+	Samples    int64       `json:"samples"`
+	Errors     int64       `json:"errors"`
+	Latency    jsonLatency `json:"latency"`
 }
 
 type jsonLatency struct {
@@ -82,6 +91,31 @@ func ExportJSON(path string, runner Runner, elapsed time.Duration) error {
 		lat.P95 = toMS(float64(m.Histogram.ValueAtPercentile(95)))
 		lat.P99 = toMS(float64(m.Histogram.ValueAtPercentile(99)))
 	}
+
+	now := time.Now()
+	jsonPhases := make([]jsonPhase, 0, len(m.phases))
+	for _, pm := range m.phases {
+		end := pm.EndTime
+		if end.IsZero() {
+			end = now
+		}
+		pLat := jsonLatency{}
+		if pm.Histogram.TotalCount() > 0 {
+			pLat.Min = toMS(float64(pm.Histogram.Min()))
+			pLat.Max = toMS(float64(pm.Histogram.Max()))
+			pLat.Avg = toMS(pm.Histogram.Mean())
+			pLat.P50 = toMS(float64(pm.Histogram.ValueAtPercentile(50)))
+			pLat.P95 = toMS(float64(pm.Histogram.ValueAtPercentile(95)))
+			pLat.P99 = toMS(float64(pm.Histogram.ValueAtPercentile(99)))
+		}
+		jsonPhases = append(jsonPhases, jsonPhase{
+			Name:       pm.Name,
+			DurationMs: math.Round(float64(end.Sub(pm.StartTime).Milliseconds())*10) / 10,
+			Samples:    pm.TotalRequests,
+			Errors:     pm.TotalErrors,
+			Latency:    pLat,
+		})
+	}
 	m.mu.Unlock()
 
 	jsonChecks := make([]jsonCheck, 0, len(checks))
@@ -126,6 +160,7 @@ func ExportJSON(path string, runner Runner, elapsed time.Duration) error {
 		Checks:      jsonChecks,
 		Thresholds:  jsonThresholds,
 		StatusCodes: scMap,
+		Phases:      jsonPhases,
 	}
 
 	data, err := json.MarshalIndent(report, "", "  ")

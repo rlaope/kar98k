@@ -82,6 +82,8 @@ func (r *JSRunner) Load(path string) error {
 }
 
 func (r *JSRunner) registerGlobals() {
+	r.registerInjection()
+
 	// scenario()
 	r.vm.Set("scenario", func(call goja.FunctionCall) goja.Value {
 		obj := call.Argument(0).ToObject(r.vm)
@@ -100,6 +102,13 @@ func (r *JSRunner) registerGlobals() {
 		}
 		if vus := obj.Get("vus"); vus != nil && vus != goja.Undefined() {
 			r.parseJSStages(vus.ToObject(r.vm))
+		}
+		if injectVal := obj.Get("inject"); injectVal != nil && injectVal != goja.Undefined() {
+			steps, err := parseJSInject(injectVal, r.vm)
+			if err != nil {
+				panic(r.vm.NewGoError(err))
+			}
+			r.scenario.Inject = steps
 		}
 		return goja.Undefined()
 	})
@@ -204,6 +213,13 @@ func (r *JSRunner) registerGlobals() {
 		}
 		d := minD + time.Duration(time.Now().UnixNano()%rangeMs)*time.Millisecond
 		return r.vm.ToValue(d.String())
+	})
+
+	// phase()
+	r.vm.Set("phase", func(call goja.FunctionCall) goja.Value {
+		name := call.Argument(0).String()
+		r.metrics.setPhase(name)
+		return goja.Undefined()
 	})
 
 	// console.log

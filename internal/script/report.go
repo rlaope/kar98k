@@ -107,6 +107,26 @@ tr:last-child td { border-bottom: none; }
 </section>
 {{end}}
 
+{{if .Phases}}
+<section>
+  <h2>By Phase</h2>
+  <table>
+    <tr><th>Phase</th><th>Duration</th><th>Samples</th><th>Errors</th><th>P50</th><th>P95</th><th>P99</th></tr>
+    {{range .Phases}}
+    <tr>
+      <td>{{.Name}}</td>
+      <td class="mono">{{.Duration}}</td>
+      <td>{{.Samples}}</td>
+      <td class="{{if gt .Errors 0}}fail{{else}}pass{{end}}">{{.Errors}}</td>
+      <td class="mono">{{.P50}}</td>
+      <td class="mono">{{.P95}}</td>
+      <td class="mono">{{.P99}}</td>
+    </tr>
+    {{end}}
+  </table>
+</section>
+{{end}}
+
 {{if .StatusCodes}}
 <section>
   <h2>Status Codes</h2>
@@ -177,9 +197,20 @@ type reportData struct {
 	HeatmapSVG    template.HTML
 	StatusAreaSVG template.HTML
 
+	Phases      []phaseRow
 	StatusCodes []statusCodeRow
 	Checks      []checkRow
 	Thresholds  []thresholdRow
+}
+
+type phaseRow struct {
+	Name     string
+	Duration string
+	Samples  int64
+	Errors   int64
+	P50      string
+	P95      string
+	P99      string
 }
 
 type statusCodeRow struct {
@@ -249,15 +280,38 @@ func ExportHTML(path string, runner Runner, elapsed time.Duration) error {
 	}
 
 	cdfSVG := buildCDFSVG(m.Histogram)
-	heatmapSVG := buildHeatmapSVG(m.TimeBuckets)
+	heatmapSVG := buildHeatmapSVG(m.TimeBuckets, m.bucketPhase)
 	statusAreaSVG := buildStatusAreaSVG(m.TimeBuckets)
+
+	toSec := func(us float64) float64 { return us / 1e6 }
+	var phases []phaseRow
+	for _, pm := range m.phases {
+		end := pm.EndTime
+		if end.IsZero() {
+			end = time.Now()
+		}
+		dur := end.Sub(pm.StartTime)
+		row := phaseRow{
+			Name:     pm.Name,
+			Duration: dur.Round(time.Millisecond).String(),
+			Samples:  pm.TotalRequests,
+			Errors:   pm.TotalErrors,
+		}
+		if pm.Histogram.TotalCount() > 0 {
+			row.P50 = fmtDuration(toSec(float64(pm.Histogram.ValueAtPercentile(50))))
+			row.P95 = fmtDuration(toSec(float64(pm.Histogram.ValueAtPercentile(95))))
+			row.P99 = fmtDuration(toSec(float64(pm.Histogram.ValueAtPercentile(99))))
+		} else {
+			row.P50, row.P95, row.P99 = "—", "—", "—"
+		}
+		phases = append(phases, row)
+	}
 	m.mu.Unlock()
 
 	hasLatency := m.Histogram.TotalCount() > 0
 	latMin, latAvg, latMax, latP50, latP95, latP99 := "", "", "", "", "", ""
 	avgLatency := "—"
 	if hasLatency {
-		toSec := func(us float64) float64 { return us / 1e6 }
 		latMin = fmtDuration(toSec(float64(m.Histogram.Min())))
 		latAvg = fmtDuration(toSec(m.Histogram.Mean()))
 		latMax = fmtDuration(toSec(float64(m.Histogram.Max())))
@@ -316,6 +370,7 @@ func ExportHTML(path string, runner Runner, elapsed time.Duration) error {
 		CDFSVG:        template.HTML(cdfSVG),
 		HeatmapSVG:    template.HTML(heatmapSVG),
 		StatusAreaSVG: template.HTML(statusAreaSVG),
+		Phases:        phases,
 		StatusCodes:   statusCodes,
 		Checks:        checks,
 		Thresholds:    thresholds,
@@ -445,7 +500,10 @@ func axisDecades(lo, hi float64) []float64 {
 // 1-minute buckets, rows are log-spaced latency bins. Each cell's
 // fill alpha tracks the bucket's request count for that latency band,
 // so visual brightness corresponds to where requests clustered.
-func buildHeatmapSVG(buckets []*TimeBucket) string {
+// phases is a parallel slice (same length as buckets) recording the
+// phase name active when each bucket was first created. When non-empty,
+// vertical boundary lines and a thin label band are drawn above the plot.
+func buildHeatmapSVG(buckets []*TimeBucket, phases []string) string {
 	if len(buckets) == 0 {
 		return ""
 	}
@@ -459,6 +517,10 @@ func buildHeatmapSVG(buckets []*TimeBucket) string {
 		return ""
 	}
 
+	hasPhases := len(phases) > 0
+	// labelBandH is the vertical space reserved above the plot for phase labels.
+	const labelBandH = 14
+
 	const (
 		rows   = 12
 		w      = 720
@@ -466,8 +528,13 @@ func buildHeatmapSVG(buckets []*TimeBucket) string {
 		pl, pr = 56, 16
 		pt, pb = 14, 24
 	)
+	// When phase labels are shown, shift the heatmap cells down by labelBandH.
+	ptEff := pt
+	if hasPhases {
+		ptEff = pt + labelBandH
+	}
 	plotW := w - pl - pr
-	plotH := hgt - pt - pb
+	plotH := hgt - ptEff - pb
 
 	cellW := math.Max(1, float64(plotW)/float64(len(buckets)))
 	rowH := float64(plotH) / float64(rows)
@@ -525,12 +592,12 @@ func buildHeatmapSVG(buckets []*TimeBucket) string {
 
 	var b bytes.Buffer
 	fmt.Fprintf(&b, `<svg viewBox="0 0 %d %d" xmlns="http://www.w3.org/2000/svg">`, w, hgt)
-	fmt.Fprintf(&b, `<rect x="%d" y="%d" width="%d" height="%d" fill="#0e0e0e" stroke="#222"/>`, pl, pt, plotW, plotH)
+	fmt.Fprintf(&b, `<rect x="%d" y="%d" width="%d" height="%d" fill="#0e0e0e" stroke="#222"/>`, pl, ptEff, plotW, plotH)
 
 	for _, c := range cells {
 		x := pl + int(float64(c.col)*cellW)
 		// Row 0 = fastest = bottom of plot.
-		y := pt + int(float64(rows-1-c.row)*rowH)
+		y := ptEff + int(float64(rows-1-c.row)*rowH)
 		intensity := math.Log1p(float64(c.count)) / math.Log1p(float64(maxCellCount))
 		fmt.Fprintf(&b,
 			`<rect data-heatmap-cell="1" x="%d" y="%d" width="%d" height="%d" fill="#87CEEB" fill-opacity="%.3f"/>`,
@@ -538,9 +605,51 @@ func buildHeatmapSVG(buckets []*TimeBucket) string {
 		)
 	}
 
+	// Phase boundary lines and label band.
+	if hasPhases {
+		type phaseBand struct {
+			name     string
+			startCol int
+			endCol   int
+		}
+		var bands []phaseBand
+		for col, ph := range phases {
+			if col == 0 || ph != phases[col-1] {
+				bands = append(bands, phaseBand{name: ph, startCol: col, endCol: col})
+			} else {
+				bands[len(bands)-1].endCol = col
+			}
+		}
+		// Extend the last band to cover any trailing buckets beyond phases slice.
+		if len(bands) > 0 {
+			bands[len(bands)-1].endCol = len(buckets) - 1
+		}
+
+		for i, band := range bands {
+			if band.name == "" {
+				continue
+			}
+			// Vertical boundary line at the left edge of each band (skip col 0).
+			if i > 0 {
+				bx := pl + int(float64(band.startCol)*cellW)
+				fmt.Fprintf(&b,
+					`<line data-phase-boundary="1" x1="%d" x2="%d" y1="%d" y2="%d" stroke="#87CEEB" stroke-width="1" stroke-dasharray="3,2" opacity="0.6"/>`,
+					bx, bx, ptEff, ptEff+plotH)
+			}
+			// Label centered over the band's column range.
+			startX := pl + int(float64(band.startCol)*cellW)
+			endX := pl + int(float64(band.endCol+1)*cellW)
+			midX := (startX + endX) / 2
+			labelY := pt + labelBandH - 3
+			fmt.Fprintf(&b,
+				`<text data-phase-label="1" x="%d" y="%d" fill="#666" font-size="9" text-anchor="middle">%s</text>`,
+				midX, labelY, band.name)
+		}
+	}
+
 	// Y-axis labels at the binEdges boundaries.
 	for r := 0; r <= rows; r += 3 {
-		y := pt + int(float64(rows-r)*rowH)
+		y := ptEff + int(float64(rows-r)*rowH)
 		label := fmtDurationFromMicros(binEdges[r])
 		fmt.Fprintf(&b, `<text x="%d" y="%d" fill="#666" font-size="10" text-anchor="end">%s</text>`, pl-6, y+3, label)
 	}

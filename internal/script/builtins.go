@@ -49,6 +49,12 @@ type Metrics struct {
 	checkMap      map[string]int
 	StartTime     time.Time
 	TimeBuckets   []*TimeBucket
+	bucketPhase   []string // phase name active when each TimeBucket was first created
+
+	// phase tracking
+	currentPhase string
+	phases       []*PhaseMetrics
+	phaseIndex   map[string]int
 }
 
 func newMetrics() *Metrics {
@@ -58,6 +64,7 @@ func newMetrics() *Metrics {
 		StatusCodes: make(map[int]int64),
 		checkMap:    make(map[string]int),
 		StartTime:   time.Now(),
+		phaseIndex:  make(map[string]int),
 	}
 }
 
@@ -76,6 +83,10 @@ func (m *Metrics) bucketFor(at time.Time) *TimeBucket {
 			Histogram:   hdrhistogram.New(1, 60000000, 3),
 			StatusCodes: make(map[int]int64),
 		})
+		// Why: phase boundaries snap to bucket edges because the heatmap's
+		// column granularity is 1 minute — sub-minute phase swaps still
+		// produce a band but the line aligns to the next bucket.
+		m.bucketPhase = append(m.bucketPhase, m.currentPhase)
 	}
 	return m.TimeBuckets[idx]
 }
@@ -85,7 +96,8 @@ func (m *Metrics) recordRequest(status int, duration time.Duration, err error) {
 	defer m.mu.Unlock()
 
 	atomic.AddInt64(&m.TotalRequests, 1)
-	if err != nil || status >= 400 {
+	isErr := err != nil || status >= 400
+	if isErr {
 		atomic.AddInt64(&m.TotalErrors, 1)
 	}
 
@@ -96,6 +108,15 @@ func (m *Metrics) recordRequest(status int, duration time.Duration, err error) {
 	bucket := m.bucketFor(time.Now())
 	bucket.Histogram.RecordValue(micros)
 	bucket.StatusCodes[status]++
+
+	if pm := m.activePhase(); pm != nil {
+		pm.Histogram.RecordValue(micros)
+		pm.StatusCodes[status]++
+		pm.TotalRequests++
+		if isErr {
+			pm.TotalErrors++
+		}
+	}
 }
 
 func (m *Metrics) recordCheck(name string, passed bool) {

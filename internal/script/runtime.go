@@ -60,15 +60,21 @@ func (r *StarlarkRunner) Load(path string) error {
 	rt.thread.SetLocal("runtime", rt)
 
 	builtins := starlark.StringDict{
-		"scenario":   starlark.NewBuiltin("scenario", scenarioBuiltin),
-		"chaos":      starlark.NewBuiltin("chaos", chaosBuiltin),
-		"ramp":       starlark.NewBuiltin("ramp", rampBuiltin),
-		"stage":      starlark.NewBuiltin("stage", stageBuiltin),
-		"check":      starlark.NewBuiltin("check", checkBuiltin),
-		"sleep":      starlark.NewBuiltin("sleep", sleepBuiltin),
-		"think_time": starlark.NewBuiltin("think_time", thinkTimeBuiltin),
-		"group":      starlark.NewBuiltin("group", groupBuiltin),
-		"http":       httpModule(rt),
+		"scenario":        starlark.NewBuiltin("scenario", scenarioBuiltin),
+		"chaos":           starlark.NewBuiltin("chaos", chaosBuiltin),
+		"ramp":            starlark.NewBuiltin("ramp", rampBuiltin),
+		"stage":           starlark.NewBuiltin("stage", stageBuiltin),
+		"check":           starlark.NewBuiltin("check", checkBuiltin),
+		"sleep":           starlark.NewBuiltin("sleep", sleepBuiltin),
+		"think_time":      starlark.NewBuiltin("think_time", thinkTimeBuiltin),
+		"group":           starlark.NewBuiltin("group", groupBuiltin),
+		"phase":           starlark.NewBuiltin("phase", phaseBuiltinStarlark),
+		"http":            httpModule(rt),
+		"nothing_for":     starlark.NewBuiltin("nothing_for", nothingForBuiltin),
+		"constant_tps":    starlark.NewBuiltin("constant_tps", constantTPSBuiltin),
+		"ramp_tps":        starlark.NewBuiltin("ramp_tps", rampTPSBuiltin),
+		"heaviside_tps":   starlark.NewBuiltin("heaviside_tps", heavisideTPSBuiltin),
+		"inject_evaluate": starlark.NewBuiltin("inject_evaluate", injectEvaluateBuiltin),
 	}
 
 	data, err := os.ReadFile(path)
