@@ -25,10 +25,17 @@ const workerVersion = "v1"
 const statsErrorBail = 10
 
 // WorkerDaemon runs the worker side of a distributed kar session.
+//
+// Multi-master support (#72): masterAddrs holds a list of master
+// endpoints. The reconnect loop cycles through them in order on each
+// new dial attempt so a worker can survive primary→standby failover
+// without operator intervention. Single-master deployments pass a
+// 1-element list.
 type WorkerDaemon struct {
-	masterAddr string
-	workerAddr string
-	clientOpts rpc.ClientOptions
+	masterAddrs []string
+	addrIdx     int // round-robin cursor into masterAddrs (used only by Run goroutine)
+	workerAddr  string
+	clientOpts  rpc.ClientOptions
 
 	// mu guards ctx, cancel, and the per-cycle resources (pool, checker,
 	// client). Stop() snapshots these under mu so it never races with the
@@ -60,18 +67,36 @@ type WorkerDaemon struct {
 	wg sync.WaitGroup
 }
 
-// NewWorkerDaemon constructs a WorkerDaemon. Call Run for automatic reconnect
-// or Start for a single connection attempt. Pass rpc.ClientOptions{} to
-// preserve the current plaintext/no-auth default.
+// NewWorkerDaemon constructs a WorkerDaemon for a single master endpoint.
+// Use NewWorkerDaemonMulti to dial primary+standby for HA. Both forms
+// share the same plaintext/no-auth default — pass rpc.ClientOptions{}
+// to keep the existing behaviour.
 func NewWorkerDaemon(masterAddr, workerAddr string, opts rpc.ClientOptions) *WorkerDaemon {
+	return NewWorkerDaemonMulti([]string{masterAddr}, workerAddr, opts)
+}
+
+// NewWorkerDaemonMulti is the multi-master constructor: the reconnect
+// loop cycles through masterAddrs in order on each new dial attempt
+// so a worker survives primary→standby failover without operator
+// intervention. The list MUST be non-empty.
+func NewWorkerDaemonMulti(masterAddrs []string, workerAddr string, opts rpc.ClientOptions) *WorkerDaemon {
 	ctx, cancel := context.WithCancel(context.Background())
 	return &WorkerDaemon{
-		masterAddr: masterAddr,
-		workerAddr: workerAddr,
-		clientOpts: opts,
-		ctx:        ctx,
-		cancel:     cancel,
+		masterAddrs: masterAddrs,
+		workerAddr:  workerAddr,
+		clientOpts:  opts,
+		ctx:         ctx,
+		cancel:      cancel,
 	}
+}
+
+// nextMasterAddr returns the next address in the round-robin sequence.
+// Single-master deployments (len == 1) always return that one address.
+// Called only from the Run goroutine, so addrIdx needs no lock.
+func (w *WorkerDaemon) nextMasterAddr() string {
+	addr := w.masterAddrs[w.addrIdx%len(w.masterAddrs)]
+	w.addrIdx++
+	return addr
 }
 
 // cancelCtx calls the current cancel function under mu.
@@ -183,9 +208,10 @@ func (w *WorkerDaemon) Run() error {
 		}
 
 		attempt++
-		log.Printf("[worker-daemon] connect attempt %d (master=%s)", attempt, w.masterAddr)
+		dialAddr := w.nextMasterAddr()
+		log.Printf("[worker-daemon] connect attempt %d (master=%s)", attempt, dialAddr)
 
-		err := w.Start()
+		err := w.Start(dialAddr)
 		if err != nil {
 			consecutiveFails++
 			log.Printf("[worker-daemon] connect failed (attempt %d, consecutive=%d): %v",
@@ -243,11 +269,16 @@ func (w *WorkerDaemon) Run() error {
 	}
 }
 
-// Start dials master, registers, and launches the three goroutines:
+// Start dials masterAddr, registers, and launches the three goroutines:
 // A -- rate-update receiver, B -- stats pusher, C -- job submission loop.
-func (w *WorkerDaemon) Start() error {
+//
+// In multi-master deployments (#72) the caller (Run) selects the
+// address per-attempt via nextMasterAddr so reconnect cycles between
+// primary and standby. Tests / single-master callers can pass any of
+// the configured masterAddrs.
+func (w *WorkerDaemon) Start(masterAddr string) error {
 	ctx := w.currentCtx()
-	c, err := rpc.NewWorkerClient(w.masterAddr, w.workerAddr, w.clientOpts)
+	c, err := rpc.NewWorkerClient(masterAddr, w.workerAddr, w.clientOpts)
 	if err != nil {
 		return err
 	}
@@ -428,7 +459,7 @@ func (w *WorkerDaemon) Start() error {
 	}()
 
 	log.Printf("[worker-daemon] started (master=%s worker=%s targets=%d)",
-		w.masterAddr, w.workerAddr, len(w.targets))
+		masterAddr, w.workerAddr, len(w.targets))
 	return nil
 }
 

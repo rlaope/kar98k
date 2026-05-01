@@ -1,0 +1,98 @@
+# Master HA (Phase 1) demo stack — primary + standby + 2 workers + etcd.
+#
+# WARNING: single-node etcd is for dev/CI only. Production deployments
+# need a 3- or 5-member etcd cluster with fsync-safe storage; otherwise
+# you've replaced "single master SPOF" with "single etcd SPOF". See
+# docs/en/distributed.md "High Availability (Master HA)".
+#
+# Build images with the ha_etcd tag before running:
+#   docker build --build-arg GOFLAGS='-tags ha_etcd' -t kar98k:ha .
+#
+# Or run directly with `go run -tags ha_etcd ./cmd/kar98k master ...`.
+
+services:
+  etcd:
+    image: quay.io/coreos/etcd:v3.5
+    command:
+      - etcd
+      - --name=etcd-dev
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --advertise-client-urls=http://etcd:2379
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --initial-advertise-peer-urls=http://etcd:2380
+      - --initial-cluster=etcd-dev=http://etcd:2380
+    healthcheck:
+      test: ["CMD", "etcdctl", "endpoint", "health"]
+      interval: 2s
+      timeout: 1s
+      retries: 5
+
+  echoserver:
+    build:
+      context: ../echoserver
+    ports:
+      - "8081:8080"
+
+  master-primary:
+    image: kar98k:ha
+    depends_on:
+      etcd:
+        condition: service_healthy
+      echoserver:
+        condition: service_started
+    command:
+      - master
+      - --config=/etc/kar/kar.yaml
+      - --listen=:7777
+      - --ha-store=etcd
+      - --ha-id=master-primary
+      - --ha-endpoints=http://etcd:2379
+      - --ha-key=/kar98k/ha/lease
+      - --ha-ttl=5s
+    volumes:
+      - ./kar.yaml:/etc/kar/kar.yaml:ro
+    ports:
+      - "7000:7000"
+      - "7777:7777"
+
+  master-standby:
+    image: kar98k:ha
+    depends_on:
+      etcd:
+        condition: service_healthy
+    command:
+      - master
+      - --config=/etc/kar/kar.yaml
+      - --listen=:7777
+      - --ha-store=etcd
+      - --ha-id=master-standby
+      - --ha-endpoints=http://etcd:2379
+      - --ha-key=/kar98k/ha/lease
+      - --ha-ttl=5s
+    volumes:
+      - ./kar.yaml:/etc/kar/kar.yaml:ro
+    ports:
+      - "7001:7000"
+      - "7778:7777"
+
+  worker-1:
+    image: kar98k:ha
+    depends_on:
+      master-primary:
+        condition: service_started
+    command:
+      - worker
+      - --master=master-primary:7777
+      - --master-standby=master-standby:7777
+      - --worker-addr=worker-1:0
+
+  worker-2:
+    image: kar98k:ha
+    depends_on:
+      master-primary:
+        condition: service_started
+    command:
+      - worker
+      - --master=master-primary:7777
+      - --master-standby=master-standby:7777
+      - --worker-addr=worker-2:0

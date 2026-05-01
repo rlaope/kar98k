@@ -72,7 +72,7 @@ When a worker receives a `DRAIN` command (e.g. `Ctrl-C`), it stops accepting new
 
 ## Known limitations (v1 Lean MVP)
 
-- **Single point of failure**: master crash ends the run. Restart master and re-start workers. Follow-up issue: master HA via active/passive standby.
+- **Single point of failure** (default): master crash ends the run unless HA is enabled. The lean default is k8s/systemd `restartPolicy: Always` + worker reconnect (#69) — that handles same-host restarts in seconds. Cross-host failover requires opt-in HA; see "High Availability (Master HA)" below.
 - **No mTLS**: plaintext gRPC only. Deploy inside a trusted VPC. Follow-up issue: mTLS + auth tokens.
 - **Inject curves not propagated**: scenario *phase names* now flow master → worker (see "Scenarios in distributed mode" below), but the inject-curve sampler still runs only on the master. Follow-up issue: full inject-curve propagation.
 - **No Prometheus per-worker labels**: all worker metrics share a single label set. Follow-up issue: per-worker Prometheus labels.
@@ -88,6 +88,86 @@ When the master config declares `scenarios:`, each phase boundary is propagated 
 4. Master's `WorkerRegistry.RecordStats` keys per-phase HdrHistogram aggregates by `phase_name`. Re-entering a previously seen phase **merges into the existing histogram** (does NOT reset) — matching solo `internal/script/phase.go:46-50` name-only re-entry semantics. The dashboard's `LatencyPercentileByPhase` and `PhaseSnapshot` surfaces read these aggregates.
 
 Workers do **not** execute scenario logic — they have no schedule, no inject curve, no phase timer. They only follow target TPS and the phase tag the master attaches to each `RateUpdate`. v1 workers (no `phase_name` field) merge into the default `""` bucket, which keeps backwards compatibility.
+
+## High Availability (Master HA)
+
+The Phase-1 HA design (#72) lets you run a primary + standby master against a coordination store so a primary crash leaves the standby acquiring the lease in **≤3 seconds** without operator intervention. Phase 2 (#74) adds histogram tail-streaming so the standby preserves percentile continuity across failover.
+
+### The "floor" — what HA is NOT for
+
+For most deployments you do NOT need this: a `restartPolicy: Always` (k8s) or `Restart=always` (systemd) **plus** the #69 worker reconnect already gives you same-host failure recovery in a few seconds. Use HA only when you need cross-host failover — i.e. the failure mode is "the entire box is gone", not just "the master process crashed".
+
+### HAStore backends
+
+`HAStore` is a pluggable interface implementing the Kleppmann fencing-token pattern. A holder that loses the lease cannot accidentally write under the old fence — fence values are strictly monotonic across the store's lifetime, including across primary restarts.
+
+| Backend | Build | Use for |
+|---|---|---|
+| `none` (default) | always | HA disabled — restart-policy + reconnect floor only |
+| `memory` | always | tests, demos — same SPOF as a single master |
+| `etcd` | `-tags ha_etcd` | production HA across hosts |
+
+```bash
+# Default build excludes etcd:
+go build ./...
+
+# Production build with etcd backend:
+go build -tags ha_etcd ./...
+```
+
+There is **no file-based backend** by design — files cannot provide fencing across a network partition.
+
+### Running primary + standby
+
+```bash
+# Primary
+kar master --config kar.yaml \
+  --listen :7777 \
+  --ha-store etcd --ha-id primary-1 \
+  --ha-endpoints http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379 \
+  --ha-ttl 5s
+
+# Standby (same flags except --ha-id)
+kar master --config kar.yaml \
+  --listen :7777 \
+  --ha-store etcd --ha-id standby-1 \
+  --ha-endpoints http://etcd-1:2379,http://etcd-2:2379,http://etcd-3:2379 \
+  --ha-ttl 5s
+```
+
+Workers dial both via `--master-standby`:
+
+```bash
+kar worker --master primary.host:7777 --master-standby standby.host:7777 ...
+```
+
+The reconnect loop (#69) cycles between the two addresses on each attempt so failover is automatic.
+
+### Operator failover
+
+```bash
+# Graceful release — any standby acquires within ~LeaseTTL.
+kar master failover --ha-store etcd --ha-endpoints ... --target ""
+
+# Forced transfer to a specific holder.
+kar master failover --ha-store etcd --ha-endpoints ... --target standby-1
+```
+
+Both paths write `last_transferred_by` + `last_transferred_at` audit metadata to the lease value.
+
+### Self-fence guarantee
+
+When a primary's `RenewLease` fails, the master self-fences via `grpcServer.GracefulStop()` within **1 s**, and the listener stops accepting connections within **1.5 s**. This is enforced by `TestGRPCServer_SelfFenceOnLeaseLoss`.
+
+### Demo stack (dev only)
+
+`examples/distributed/compose.ha.yml` brings up a single-node etcd + 1 primary + 1 standby + 2 workers + an echoserver. **Single-node etcd is for dev/CI only.** Production deployments need a 3- or 5-member etcd cluster with fsync-safe storage; otherwise you have replaced the master SPOF with an etcd SPOF.
+
+`examples/distributed/smoke-ha.sh` validates the failover path: starts the stack, kills the primary, asserts the standby acquires within ~5 s.
+
+### Honest about the percentile gap
+
+Phase 1's standby starts with an empty HdrHistogram, so the **first few seconds of post-failover P95/P99** reflect samples from only the new master. The `kar98k_ha_failover_total` counter records every failover event; the `kar98k_ha_failover_percentile_gap_ms` gauge is reserved for **Phase 2 (#74)**, which streams histogram aggregates to the standby and updates this gauge with the bounded staleness it observed. In Phase 1 the gauge stays at 0 because there is no replica to measure against.
 
 ## Hot-add benchmark
 

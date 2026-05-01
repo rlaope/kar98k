@@ -31,6 +31,14 @@ type Metrics struct {
 	QueueDropsPerWorker   *prometheus.CounterVec
 	LatencyP95MsPerWorker *prometheus.GaugeVec
 	ErrorRatePerWorker    *prometheus.GaugeVec
+
+	// Master HA metrics (issue #72). HAFailoverTotal increments on every
+	// lease loss event (renew failure or graceful transfer). The percentile
+	// gap gauge is honest about Phase-1 limitation: standby starts with an
+	// empty histogram, so failover loses percentile continuity. Phase 2
+	// (#74) tail-streams histograms to standby to bound this.
+	HAFailoverTotal           prometheus.Counter
+	HAFailoverPercentileGapMs prometheus.Gauge
 }
 
 // NewMetrics creates and registers all Prometheus metrics on the default registry.
@@ -179,6 +187,20 @@ func NewMetricsWithRegistry(reg prometheus.Registerer) *Metrics {
 			},
 			[]string{"worker_id"},
 		),
+		HAFailoverTotal: f.NewCounter(
+			prometheus.CounterOpts{
+				Namespace: "kar98k",
+				Name:      "ha_failover_total",
+				Help:      "Cumulative master HA failover events (lease lost, transferred, or self-fenced)",
+			},
+		),
+		HAFailoverPercentileGapMs: f.NewGauge(
+			prometheus.GaugeOpts{
+				Namespace: "kar98k",
+				Name:      "ha_failover_percentile_gap_ms",
+				Help:      "Bounded staleness of the standby's percentile snapshot at last failover (Phase 1: 0 — standby has no replica)",
+			},
+		),
 	}
 }
 
@@ -257,6 +279,21 @@ func (m *Metrics) RecordScenarioTransition(from, to string) {
 // closed (traffic flowing) and 1 for open (traffic paused).
 func (m *Metrics) SetCircuitBreakerState(v float64) {
 	m.CircuitBreakerState.Set(v)
+}
+
+// IncHAFailover increments the master HA failover counter. Call from
+// HALeaseManager.OnLost or graceful-transfer handlers (#72).
+func (m *Metrics) IncHAFailover() {
+	m.HAFailoverTotal.Inc()
+}
+
+// SetHAFailoverPercentileGapMs records the bounded staleness of the
+// standby's percentile snapshot at the moment of the last failover.
+// Phase 1 always reports 0 because the standby starts with an empty
+// histogram; Phase 2 (#74) tail-streams aggregates and updates this
+// gauge with the real lag.
+func (m *Metrics) SetHAFailoverPercentileGapMs(gap float64) {
+	m.HAFailoverPercentileGapMs.Set(gap)
 }
 
 // IncRequestsInFlight increments the in-flight requests counter.

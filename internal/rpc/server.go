@@ -9,6 +9,7 @@ import (
 	"net"
 	"os"
 	"sync/atomic"
+	"time"
 
 	"github.com/kar98k/internal/config"
 	pb "github.com/kar98k/internal/rpc/proto"
@@ -33,11 +34,13 @@ type MasterServer struct {
 	statsIntervalMs int
 }
 
-// grpcServerConfig accumulates gRPC server-level options (TLS, auth) built
-// by WithTLS and WithAuthToken before NewGRPCServer calls grpc.NewServer.
+// grpcServerConfig accumulates gRPC server-level options (TLS, auth, HA) built
+// by WithTLS / WithAuthToken / WithHALease before NewGRPCServer calls grpc.NewServer.
 type grpcServerConfig struct {
-	tlsCreds  credentials.TransportCredentials
-	authToken string
+	tlsCreds   credentials.TransportCredentials
+	authToken  string
+	lease      *HALeaseManager
+	onFailover func()
 }
 
 // ServerOption configures a MasterServer.
@@ -91,6 +94,18 @@ func WithTLS(tlsCfg *config.TLSConfig) (GRPCServerOption, error) {
 // When token is empty this is a no-op (plaintext default preserved).
 func WithAuthToken(token string) GRPCServerOption {
 	return func(c *grpcServerConfig) { c.authToken = token }
+}
+
+// WithHALease attaches a *HALeaseManager so this server only accepts
+// connections after the lease is held. On lease loss the server
+// self-fences via GracefulStop within 1s. onFailover is an optional
+// callback invoked once at self-fence — wire it to a metrics counter
+// (e.g. health.Metrics.IncHAFailover) to record the event.
+func WithHALease(lease *HALeaseManager, onFailover func()) GRPCServerOption {
+	return func(c *grpcServerConfig) {
+		c.lease = lease
+		c.onFailover = onFailover
+	}
 }
 
 // GRPCServerOptionFromTLSConfig wraps a pre-built *tls.Config as a
@@ -172,10 +187,27 @@ func (s *MasterServer) Stats(stream pb.KarMaster_StatsServer) error {
 }
 
 // GRPCServer wraps a grpc.Server and its listener for lifecycle management.
+//
+// HA-aware lifecycle (when WithHALease is supplied):
+//   1. Serve() runs lease.Run() in a goroutine and BLOCKS on AcquireLease
+//      before accepting connections. A standby that cannot acquire
+//      simply waits — Serve() returns ErrLeaseAcquireFailed only on
+//      timeout.
+//   2. lease.OnLost is wired to GracefulStop in a goroutine (≤1s budget)
+//      so a fenced-out primary stops accepting connections immediately
+//      after detection. net.Dial against the listener returns
+//      "connection refused" within 1.5s of the lease-loss event.
+//   3. Stop() invokes lease.TransferAndRelease("") so the standby can
+//      acquire within ~LeaseTTL (≤2s in defaults) instead of waiting
+//      for the primary's TTL to expire.
 type GRPCServer struct {
 	srv      *grpc.Server
 	listener net.Listener
 	addr     string
+
+	lease         *HALeaseManager
+	onFailover    func() // optional metric hook; called once when self-fence triggers
+	stoppedByLost atomic.Bool
 }
 
 // NewGRPCServer creates and binds a gRPC server on addr, registering the
@@ -207,7 +239,13 @@ func NewGRPCServer(addr string, registry *WorkerRegistry, gopts ...GRPCServerOpt
 	srv := grpc.NewServer(srvOpts...)
 	pb.RegisterKarMasterServer(srv, NewMasterServer(registry))
 
-	return &GRPCServer{srv: srv, listener: ln, addr: addr}, nil
+	return &GRPCServer{
+		srv:        srv,
+		listener:   ln,
+		addr:       addr,
+		lease:      gcfg.lease,
+		onFailover: gcfg.onFailover,
+	}, nil
 }
 
 // Addr returns the address the server is listening on. Useful in tests that
@@ -217,13 +255,69 @@ func (g *GRPCServer) Addr() string {
 }
 
 // Serve begins accepting connections. Blocks until Stop is called.
+//
+// When HA is configured (WithHALease), Serve first acquires the lease
+// (blocks until AcquireLease succeeds or times out) and runs the renew
+// loop in a goroutine. On RenewLease error the OnLost callback fires
+// GracefulStop and Serve returns nil.
 func (g *GRPCServer) Serve() error {
-	log.Printf("[grpc] serving on %s", g.addr)
+	if g.lease == nil {
+		log.Printf("[grpc] serving on %s", g.addr)
+		return g.srv.Serve(g.listener)
+	}
+
+	leaseCtx, cancelLease := context.WithCancel(context.Background())
+	defer cancelLease()
+
+	g.lease.OnLost = func(reason string) {
+		if !g.stoppedByLost.CompareAndSwap(false, true) {
+			return
+		}
+		log.Printf("[grpc] HA lease lost (%s) — initiating GracefulStop", reason)
+		if g.onFailover != nil {
+			g.onFailover()
+		}
+		go g.srv.GracefulStop()
+	}
+
+	leaseDone := make(chan error, 1)
+	go func() { leaseDone <- g.lease.Run(leaseCtx) }()
+
+	// Block here until lease acquired (Run blocks during AcquireLease and
+	// the first renew). We can't easily peek inside HALeaseManager, so we
+	// poll the fence — which is set after AcquireLease succeeds.
+	deadline := time.Now().Add(g.lease.AcquireTimeout + time.Second)
+	for g.lease.Fence() == 0 {
+		select {
+		case err := <-leaseDone:
+			if err != nil {
+				return err
+			}
+			return ErrLeaseAcquireFailed
+		default:
+		}
+		if time.Now().After(deadline) {
+			cancelLease()
+			return ErrLeaseAcquireFailed
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+
+	log.Printf("[grpc] HA lease acquired (fence=%d), serving on %s", g.lease.Fence(), g.addr)
 	return g.srv.Serve(g.listener)
 }
 
-// Stop gracefully shuts down the gRPC server.
+// Stop gracefully shuts down the gRPC server. When HA is configured the
+// lease is transferred to "" (released) so a standby can acquire within
+// ~LeaseTTL instead of waiting for primary TTL expiry.
 func (g *GRPCServer) Stop() {
+	if g.lease != nil && !g.stoppedByLost.Load() {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		defer cancel()
+		if err := g.lease.TransferAndRelease(ctx, ""); err != nil {
+			log.Printf("[grpc] graceful lease release failed: %v", err)
+		}
+	}
 	log.Printf("[grpc] stopping server")
 	g.srv.GracefulStop()
 }

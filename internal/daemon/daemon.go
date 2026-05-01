@@ -87,6 +87,7 @@ type Daemon struct {
 	pool          *worker.Pool
 	registry      *rpc.WorkerRegistry
 	grpcServer    *rpc.GRPCServer
+	leaseManager  *rpc.HALeaseManager // nil unless cfg.Master.HA is set
 	checker       *health.Checker
 	metrics       *health.Metrics
 	engine        *pattern.Engine
@@ -255,6 +256,25 @@ func (d *Daemon) startMaster() error {
 	}
 	if d.cfg.Master.AuthToken != "" {
 		grpcOpts = append(grpcOpts, rpc.WithAuthToken(d.cfg.Master.AuthToken))
+	}
+
+	if hacfg := d.cfg.Master.HA; hacfg != nil && hacfg.Store != "" && hacfg.Store != "none" {
+		store, err := rpc.BuildHAStore(rpc.HAStoreSpec{
+			Backend:   hacfg.Store,
+			HolderID:  hacfg.HolderID,
+			Endpoints: hacfg.Endpoints,
+			LeaseKey:  hacfg.LeaseKey,
+			LeaseTTL:  hacfg.TTL,
+		})
+		if err != nil {
+			return fmt.Errorf("HA store: %w", err)
+		}
+		mgr := rpc.NewHALeaseManager(store, hacfg.HolderID)
+		if hacfg.TTL > 0 {
+			mgr.LeaseTTL = hacfg.TTL
+		}
+		d.leaseManager = mgr
+		grpcOpts = append(grpcOpts, rpc.WithHALease(mgr, d.metrics.IncHAFailover))
 	}
 
 	grpcSrv, err := rpc.NewGRPCServer(listen, d.registry, grpcOpts...)

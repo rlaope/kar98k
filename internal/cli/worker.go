@@ -16,6 +16,7 @@ import (
 
 var (
 	workerMasterAddr       string
+	workerMasterStandby    string
 	workerSelfAddr         string
 	workerTLSCert          string
 	workerTLSClientKey     string
@@ -45,6 +46,7 @@ Example:
 
 func init() {
 	workerCmd.Flags().StringVar(&workerMasterAddr, "master", "", "Master node gRPC address (required)")
+	workerCmd.Flags().StringVar(&workerMasterStandby, "master-standby", "", "Standby master gRPC address; reconnect cycles between primary and standby for HA (#72)")
 	workerCmd.Flags().StringVar(&workerSelfAddr, "worker-addr", defaultWorkerAddr(), "Worker's own address advertised to master")
 	workerCmd.Flags().StringVar(&workerTLSCert, "tls-cert", "", "Path to client certificate PEM for mTLS")
 	workerCmd.Flags().StringVar(&workerTLSClientKey, "tls-client-key", "", "Path to client private key PEM for mTLS (required with --tls-cert)")
@@ -58,7 +60,13 @@ func init() {
 }
 
 func runWorker(cmd *cobra.Command, args []string) error {
-	fmt.Printf("kar worker starting (master: %s, self: %s)\n", workerMasterAddr, workerSelfAddr)
+	addrs := []string{workerMasterAddr}
+	if workerMasterStandby != "" {
+		addrs = append(addrs, workerMasterStandby)
+		fmt.Printf("kar worker starting (master: %s, standby: %s, self: %s)\n", workerMasterAddr, workerMasterStandby, workerSelfAddr)
+	} else {
+		fmt.Printf("kar worker starting (master: %s, self: %s)\n", workerMasterAddr, workerSelfAddr)
+	}
 
 	opts, err := buildClientOptions()
 	if err != nil {
@@ -67,7 +75,7 @@ func runWorker(cmd *cobra.Command, args []string) error {
 	opts.BackoffMax = workerReconnectBackoff
 	opts.MaxAttempts = workerReconnectMax
 
-	wd := daemon.NewWorkerDaemon(workerMasterAddr, workerSelfAddr, opts)
+	wd := daemon.NewWorkerDaemonMulti(addrs, workerSelfAddr, opts)
 
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)

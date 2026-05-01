@@ -26,6 +26,18 @@ type Master struct {
 	Listen    string     `yaml:"listen,omitempty"`     // e.g. ":7777"; defaults to ":7777" when empty
 	TLS       *TLSConfig `yaml:"tls,omitempty"`        // nil = plaintext (default)
 	AuthToken string     `yaml:"auth_token,omitempty"` // bearer token; empty = no auth
+	HA        *HAConfig  `yaml:"ha,omitempty"`         // nil = HA disabled (default — k8s/systemd restart is the floor)
+}
+
+// HAConfig opts a master into Phase-1 HA. Default backend "memory" is
+// for tests only; production deployments should use "etcd" (built with
+// the ha_etcd build tag). See docs/en/distributed.md.
+type HAConfig struct {
+	Store     string        `yaml:"store"`               // "memory" | "etcd"
+	HolderID  string        `yaml:"holder_id"`           // unique self-identifier
+	Endpoints []string      `yaml:"endpoints,omitempty"` // etcd endpoints (etcd backend only)
+	LeaseKey  string        `yaml:"lease_key,omitempty"` // etcd key for the lease, defaults to "/kar98k/ha/lease"
+	TTL       time.Duration `yaml:"ttl,omitempty"`       // lease TTL, defaults to 5s
 }
 
 // TLSConfig holds paths to the TLS certificate, private key, and optional
